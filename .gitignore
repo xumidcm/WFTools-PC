@@ -67,3 +67,4 @@ CTestTestfile.cmake
 decompiled/
 decompilled/
 docs/
+.vscode/
