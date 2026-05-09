@@ -257,12 +257,28 @@ All dependency versions are centralized in `gradle/libs.versions.toml`. Update v
 
 ```toml
 [versions]
+agp = "8.8.1"
+kotlin = "2.0.0"
+coreKtx = "1.15.0"
+lifecycleRuntimeKtx = "2.8.7"
+activityCompose = "1.10.0"
+composeBom = "2024.04.01"
+navCompose = "2.8.0"
 okhttp = "4.12.0"
 coil = "2.6.0"
+media3 = "1.2.0"
 
 [libraries]
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
+androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
+androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 ```
+
+Additional dependencies declared directly in `build.gradle.kts`:
+- `com.googlecode.plist:dd-plist:1.28` — Plist file parser
+- `com.google.code.gson:gson:2.10.1` — JSON serialization
+- `androidx.documentfile:documentfile:1.0.1` — SAF document file access
 
 ### Gradle Kotlin DSL
 
