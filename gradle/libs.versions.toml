@@ -13,6 +13,7 @@ okhttp = "4.12.0"
 coil = "2.6.0"
 media3 = "1.2.0"
 jump3r = "1.0.5"
+luaj = "1.0.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -36,6 +37,7 @@ coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coi
 androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
 androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 jump3r = { group = "de.sciss", name = "jump3r", version.ref = "jump3r" }
+taoguan-luaj = { group = "io.github.taoguan", name = "luaj", version.ref = "luaj" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
