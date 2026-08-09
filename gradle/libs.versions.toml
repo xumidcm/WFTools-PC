@@ -14,6 +14,7 @@ coil = "2.6.0"
 media3 = "1.2.0"
 jump3r = "1.0.5"
 luaj = "1.0.3"
+osmdroid = "6.1.20"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -38,6 +39,7 @@ androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplaye
 androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 jump3r = { group = "de.sciss", name = "jump3r", version.ref = "jump3r" }
 taoguan-luaj = { group = "io.github.taoguan", name = "luaj", version.ref = "luaj" }
+osmdroid-android = { group = "org.osmdroid", name = "osmdroid-android", version.ref = "osmdroid" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
