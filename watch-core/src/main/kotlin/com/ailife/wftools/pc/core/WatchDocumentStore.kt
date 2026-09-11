@@ -1,0 +1,391 @@
+package com.ailife.wftools.pc.core
+
+import com.google.gson.Gson
+import java.nio.channels.FileChannel
+import java.nio.file.*
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
+import java.security.MessageDigest
+import java.time.Instant
+import java.util.Locale
+import java.util.UUID
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
+import java.util.zip.CRC32
+import java.io.ByteArrayInputStream
+import java.io.OutputStream
+import javax.imageio.ImageIO
+import javax.imageio.stream.MemoryCacheImageInputStream
+
+/** Owns immutable source copies and durable per-document drafts. No source writes occur on open. */
+class WatchDocumentStore(val workspaceRoot: Path = defaultWorkspace()) {
+    private val gson = Gson()
+
+    fun open(path: Path): DocumentSession {
+        val source = path.toAbsolutePath().normalize()
+        val id = UUID.randomUUID().toString()
+        val home = workspaceRoot.resolve(id)
+        try {
+            if (!Files.isRegularFile(source)) throw WatchDocumentException.OpenFailed("找不到表盘文件：$source")
+            Files.createDirectories(home.resolve("content"))
+            val before = hashFile(source)
+            Files.copy(source, home.resolve("original.zip"))
+            if (before != hashFile(source) || before != hashFile(home.resolve("original.zip")))
+                throw WatchDocumentException.ExternalModification()
+            val entry = extract(home.resolve("original.zip"), home.resolve("content"))
+            val xml = Files.readString(home.resolve("content").resolve(entry), Charsets.UTF_8).removePrefix("\uFEFF")
+            val document = WatchXml.parse(xml); WatchXml.validate(document)
+            val snapshot = DocumentSnapshot(WatchXml.serialize(document), WatchXml.layers(document).map { UUID.randomUUID().toString() })
+            return DocumentSession(this, id, source, home, entry, before, snapshot).also {
+                it.savedSignature = signature(snapshot)
+                persist(it)
+            }
+        } catch (e: WatchDocumentException) { throw e }
+        catch (e: Exception) { throw WatchDocumentException.OpenFailed("无法打开表盘：${e.message}", e) }
+    }
+
+    fun newDocument(): DocumentSession {
+        try {
+            val id = UUID.randomUUID().toString(); val home = workspaceRoot.resolve(id)
+            Files.createDirectories(home.resolve("content"))
+            val xml = """<?xml version="1.0" encoding="UTF-8"?><Watch name="新建表盘" width="512" height="512" shape="R" bg_color="000000" protection="n"><Layers/></Watch>"""
+            val state = DocumentSnapshot(WatchXml.serialize(WatchXml.parse(xml)), emptyList())
+            return DocumentSession(this, id, null, home, "watch.xml", null, state).also { persist(it) }
+        } catch (e: WatchDocumentException) { throw e }
+        catch (e: Exception) { throw WatchDocumentException.OpenFailed("无法创建表盘工作区：${e.message}", e) }
+    }
+
+    fun save(session: DocumentSession, target: Path = session.sourcePath
+        ?: throw WatchDocumentException.SaveFailed("新建表盘需要选择另存为路径。"),
+        derivedResources: Map<String, ByteArray> = emptyMap()) {
+        session.ensureOpen()
+        val absolute = target.toAbsolutePath().normalize()
+        var temp: Path? = null
+        try {
+            if (absolute.startsWith(workspaceRoot.toAbsolutePath().normalize()))
+                throw WatchDocumentException.SaveFailed("请选择会话工作区以外的保存位置。")
+            val sameSource = session.sourcePath?.toAbsolutePath()?.normalize() == absolute
+            if (sameSource) verifySource(session)
+            if (!session.hasUnsavedChanges && sameSource) return
+            // Derived previews are save outputs, not editing commands. Clean Save
+            // As also ignores them to retain the latest source archive byte-for-byte.
+            val prepared = if (session.hasUnsavedChanges) prepareDerivedResources(session, derivedResources) else emptyMap()
+            val derived = session.savedDerivedResources + prepared
+            val previousTargetHash = if (Files.exists(absolute)) {
+                if (!Files.isRegularFile(absolute)) throw WatchDocumentException.SaveFailed("保存位置不是普通文件：$absolute")
+                hashFile(absolute)
+            } else null
+            val parent = absolute.parent ?: throw WatchDocumentException.SaveFailed("无效的保存路径。")
+            Files.createDirectories(parent)
+            temp = Files.createTempFile(parent, ".wftools-", ".watch.tmp")
+            val cleanSource = session.sourcePath?.takeIf {
+                !session.hasUnsavedChanges && Files.isRegularFile(it) && hashFile(it) == session.sourceHash
+            }
+            if (cleanSource != null) Files.copy(cleanSource, temp, REPLACE_EXISTING)
+            else writeArchive(session, temp, derived)
+            // Re-open and consume every entry before committing, checking XML and CRC/structure.
+            validateArchive(temp)
+            FileChannel.open(temp, StandardOpenOption.WRITE).use { it.force(true) }
+            if (sameSource) verifySource(session)
+            val currentTargetHash = if (Files.isRegularFile(absolute)) hashFile(absolute) else null
+            if (currentTargetHash != previousTargetHash || (Files.exists(absolute) && !Files.isRegularFile(absolute)))
+                throw WatchDocumentException.ExternalModification()
+            val newHash = hashFile(temp)
+            // Deliberately no non-atomic fallback: an unsupported filesystem leaves
+            // the original untouched and reports a recoverable save error.
+            Files.move(temp, absolute, ATOMIC_MOVE, REPLACE_EXISTING)
+            temp = null
+            session.sourcePath = absolute
+            session.sourceHash = newHash
+            session.savedSignature = signature(session.state)
+            session.savedDerivedResources = derived
+            // Source commit succeeded. A draft failure is reported separately and
+            // never misrepresented as a failed or rolled-back source save.
+            try {
+                persist(session)
+                materializeDerivedResources(session)
+                session.lastDraftError = null
+            } catch (e: Exception) { session.lastDraftError = "表盘已保存，但恢复草稿或缩略图工作副本更新失败：${e.message}" }
+        } catch (e: WatchDocumentException) { throw e }
+        catch (e: Exception) { throw WatchDocumentException.SaveFailed("保存失败，原文件保持不变：${e.message}", e) }
+        finally { temp?.let { try { Files.deleteIfExists(it) } catch (_: Exception) {} } }
+    }
+
+    fun listRecoveryDrafts(): List<RecoveryDraft> {
+        if (!Files.isDirectory(workspaceRoot)) return emptyList()
+        return Files.list(workspaceRoot).use { homes ->
+            homes.filter { Files.isRegularFile(it.resolve("draft.json")) && !Files.exists(it.resolve("discarded")) }.map { home ->
+                try {
+                    val journal = readJournal(home)
+                    if (journal.savedSignature == signature(journal.state)) null
+                    else RecoveryDraft(journal.id, WatchXml.parse(journal.state.xml).documentElement.getAttribute("name"),
+                        journal.sourcePath?.let { Path.of(it) }, Instant.ofEpochMilli(journal.updatedAt))
+                } catch (_: Exception) { null }
+            }.filter { it != null }.map { it!! }.toList().sortedByDescending { it.updatedAt }
+        }
+    }
+
+    fun recover(id: String): DocumentSession {
+        try {
+            UUID.fromString(id)
+            val home = workspaceRoot.resolve(id)
+            if (Files.exists(home.resolve("discarded"))) throw WatchDocumentException.RecoveryFailed("此草稿已被放弃。请重新打开源表盘开始新的编辑。")
+            val journal = readJournal(home)
+            if (journal.version != 1 || journal.id != id) throw WatchDocumentException.RecoveryFailed("草稿版本或会话标识无效。")
+            validateSnapshot(journal.state)
+            val original = home.resolve("original.zip")
+            if (journal.baseArchiveHash != null && (!Files.isRegularFile(original) || hashFile(original) != journal.baseArchiveHash))
+                throw WatchDocumentException.RecoveryFailed("原始表盘工作副本缺失或损坏；为避免丢失资源，无法恢复此草稿。")
+            // A crash can leave content ahead of the committed journal. Rebuild a
+            // fresh working tree from the immutable archive, then apply only the
+            // durable snapshot. The old tree is retained for diagnosis.
+            val recoveredContent = Files.createTempDirectory(home, "recovered-content-")
+            if (Files.isRegularFile(original)) extract(original, recoveredContent)
+            val session = DocumentSession(this, id, journal.sourcePath?.let { Path.of(it) }, home, journal.xmlEntry,
+                journal.sourceHash, journal.state, recoveredContent, journal.baseArchiveHash)
+            session.savedDerivedResources = journal.derivedResources.orEmpty()
+            validateDerivedHashes(session.savedDerivedResources)
+            session.savedSignature = journal.savedSignature; session.revision = journal.revision
+            session.undoStack.addAll(journal.undo.takeLast(50)); session.redoStack.addAll(journal.redo.takeLast(50))
+            session.materializeAssets(journal.state, fullVerification = true)
+            materializeDerivedResources(session)
+            return session
+        } catch (e: WatchDocumentException) { throw e }
+        catch (e: Exception) { throw WatchDocumentException.RecoveryFailed("无法恢复草稿：${e.message}", e) }
+    }
+
+    /** Hides a discarded draft without deleting its workspace or touching its source. */
+    fun discardRecovery(id: String) {
+        try {
+            UUID.fromString(id)
+            val home = workspaceRoot.resolve(id)
+            if (!Files.isRegularFile(home.resolve("draft.json"))) throw WatchDocumentException.RecoveryFailed("找不到此恢复草稿。")
+            val temp = Files.createTempFile(home, ".discard-", ".tmp")
+            try {
+                Files.writeString(temp, "Discarded ${Instant.now()}")
+                FileChannel.open(temp, StandardOpenOption.WRITE).use { it.force(true) }
+                Files.move(temp, home.resolve("discarded"), ATOMIC_MOVE, REPLACE_EXISTING)
+            } finally { Files.deleteIfExists(temp) }
+        } catch (e: WatchDocumentException) { throw e }
+        catch (e: Exception) { throw WatchDocumentException.RecoveryFailed("无法标记放弃草稿：${e.message}", e) }
+    }
+
+    internal fun persist(session: DocumentSession) {
+        val journal = DraftJournal(id = session.id, sourcePath = session.sourcePath?.toString(), sourceHash = session.sourceHash, baseArchiveHash = session.baseArchiveHash,
+            savedSignature = session.savedSignature, revision = session.revision, xmlEntry = session.xmlEntry,
+            state = session.state, undo = session.undoStack.toList(), redo = session.redoStack.toList(), derivedResources = session.savedDerivedResources)
+        val temp = Files.createTempFile(session.home, ".draft-", ".tmp")
+        try {
+            Files.writeString(temp, gson.toJson(journal), Charsets.UTF_8)
+            FileChannel.open(temp, StandardOpenOption.WRITE).use { it.force(true) }
+            Files.move(temp, session.home.resolve("draft.json"), ATOMIC_MOVE, REPLACE_EXISTING)
+        } catch (e: Exception) {
+            throw WatchDocumentException.RecoveryFailed("无法写入恢复草稿；本次编辑未提交：${e.message}", e)
+        } finally { Files.deleteIfExists(temp) }
+    }
+
+    private fun readJournal(home: Path): DraftJournal = gson.fromJson(Files.readString(home.resolve("draft.json")), DraftJournal::class.java)
+
+    private fun verifySource(session: DocumentSession) {
+        val path = session.sourcePath ?: return
+        if (!Files.isRegularFile(path) || session.sourceHash != hashFile(path)) throw WatchDocumentException.ExternalModification()
+    }
+
+    private fun extract(archive: Path, content: Path): String {
+        val xmlEntry = validateArchive(archive)
+        ZipFile(archive.toFile()).use { zip ->
+            zip.entries().asSequence().forEach { entry ->
+                val destination = content.resolve(entry.name).normalize()
+                if (entry.isDirectory) Files.createDirectories(destination)
+                else {
+                    Files.createDirectories(destination.parent)
+                    zip.getInputStream(entry).use { Files.copy(it, destination) }
+                }
+            }
+        }
+        return xmlEntry
+    }
+
+    private fun validateArchive(archive: Path): String {
+        try {
+            ZipFile(archive.toFile()).use { zip ->
+                val names = HashSet<String>(); var total = 0L; var xmlEntry: String? = null
+                val entries = zip.entries().asSequence().toList()
+                if (entries.size > 50_000) throw WatchDocumentException.UnsafeArchive("压缩包条目过多，无法安全打开。")
+                if (entries.any { it.name.equals("watch.pxml", true) }) throw WatchDocumentException.UnsupportedProtection()
+                entries.forEach { entry ->
+                    validateArchiveName(entry.name)
+                    if (!names.add(entry.name.trimEnd('/').lowercase(Locale.ROOT)))
+                        throw WatchDocumentException.UnsafeArchive("压缩包含重复或大小写冲突路径：${entry.name}")
+                    if (!entry.isDirectory) {
+                        var size = 0L
+                        val crc = CRC32()
+                        zip.getInputStream(entry).use { input ->
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) {
+                                val n = input.read(buffer); if (n < 0) break
+                                crc.update(buffer, 0, n)
+                                size += n; total += n
+                                if (size > 256L * 1024 * 1024 || total > 1024L * 1024 * 1024)
+                                    throw WatchDocumentException.UnsafeArchive("表盘解压大小超过安全限制。")
+                            }
+                        }
+                        if ((entry.crc >= 0 && crc.value != entry.crc) || (entry.size >= 0 && size != entry.size))
+                            throw WatchDocumentException.InvalidArchive("压缩包资源校验失败：${entry.name}。文件可能已损坏，请重新复制或下载表盘。")
+                    }
+                    if (entry.name.equals("watch.xml", true)) xmlEntry = entry.name
+                }
+                val name = xmlEntry ?: throw WatchDocumentException.InvalidDocument("压缩包根目录缺少 watch.xml。")
+                val xml = zip.getInputStream(zip.getEntry(name)).use { it.readBytes().toString(Charsets.UTF_8).removePrefix("\uFEFF") }
+                WatchXml.validate(WatchXml.parse(xml))
+                return name
+            }
+        } catch (e: WatchDocumentException) { throw e }
+        catch (e: Exception) { throw WatchDocumentException.InvalidArchive("ZIP 数据无效或不完整，请重新复制或下载表盘：${e.message}", e) }
+    }
+
+    private fun writeArchive(session: DocumentSession, target: Path, derived: Map<String, String>) {
+        val original = session.home.resolve("original.zip")
+        if (session.baseArchiveHash != null && (!Files.isRegularFile(original) || hashFile(original) != session.baseArchiveHash))
+            throw WatchDocumentException.SaveFailed("原始表盘工作副本缺失或损坏，无法安全保留原有资源。请恢复工作副本或重新打开源表盘。")
+        validateDerivedHashes(derived)
+        val written = HashSet<String>()
+        ZipOutputStream(Files.newOutputStream(target)).use { out ->
+            if (Files.isRegularFile(original)) ZipFile(original.toFile()).use { zip ->
+                zip.comment?.let { out.setComment(it) }
+                zip.entries().asSequence().forEach { entry ->
+                    val copy = ZipEntry(entry.name).apply { time = entry.time; comment = entry.comment; extra = entry.extra }
+                    out.putNextEntry(copy)
+                    if (entry.name == session.xmlEntry) out.write(session.state.xml.toByteArray(Charsets.UTF_8))
+                    else if (entry.name.equals("scripts/script.txt", true) && session.state.scriptOverride != null)
+                        out.write(session.state.scriptOverride!!.toByteArray(Charsets.UTF_8))
+                    else if (entry.name.lowercase(Locale.ROOT) in derived)
+                        writeBlob(session, derived.getValue(entry.name.lowercase(Locale.ROOT)), entry.name, out)
+                    else if (!entry.isDirectory) zip.getInputStream(entry).use { it.copyTo(out) }
+                    out.closeEntry(); written.add(entry.name.lowercase(Locale.ROOT))
+                }
+            }
+            if (session.xmlEntry.lowercase(Locale.ROOT) !in written) {
+                out.putNextEntry(ZipEntry(session.xmlEntry)); out.write(session.state.xml.toByteArray(Charsets.UTF_8)); out.closeEntry()
+            }
+            if (session.state.scriptOverride != null && "scripts/script.txt" !in written) {
+                out.putNextEntry(ZipEntry("scripts/script.txt")); out.write(session.state.scriptOverride!!.toByteArray(Charsets.UTF_8)); out.closeEntry()
+            }
+            session.state.importedAssets.forEach { (name, blob) ->
+                if (!written.add(name.lowercase(Locale.ROOT))) throw WatchDocumentException.SaveFailed("资源名冲突：$name")
+                validateArchiveName(name)
+                val blobPath = session.home.resolve("blobs").resolve(blob)
+                if (!Files.isRegularFile(blobPath) || hashFile(blobPath) != blob)
+                    throw WatchDocumentException.SaveFailed("导入资源缺失或损坏，请撤销后重新导入：$name")
+                out.putNextEntry(ZipEntry(name))
+                Files.newInputStream(blobPath).use { it.copyTo(out) }
+                out.closeEntry()
+            }
+            derived.forEach { (name, hash) ->
+                if (written.add(name.lowercase(Locale.ROOT))) {
+                    out.putNextEntry(ZipEntry(name)); writeBlob(session, hash, name, out); out.closeEntry()
+                }
+            }
+        }
+    }
+
+    /** Force blob bytes to disk before a draft or completed save can refer to them. */
+    internal fun stageBlob(home: Path, bytes: ByteArray): String {
+        val hash = hashBytes(bytes); val folder = home.resolve("blobs"); val destination = folder.resolve(hash)
+        Files.createDirectories(folder)
+        if (Files.isRegularFile(destination) && hashFile(destination) == hash) return hash
+        val temp = Files.createTempFile(folder, ".blob-", ".tmp")
+        try {
+            Files.write(temp, bytes)
+            FileChannel.open(temp, StandardOpenOption.WRITE).use { it.force(true) }
+            Files.move(temp, destination, ATOMIC_MOVE, REPLACE_EXISTING)
+        } finally { Files.deleteIfExists(temp) }
+        return hash
+    }
+
+    private fun prepareDerivedResources(session: DocumentSession, input: Map<String, ByteArray>): Map<String, String> {
+        val prepared = LinkedHashMap<String, ByteArray>()
+        input.forEach { (name, bytes) ->
+            val key = name.lowercase(Locale.ROOT)
+            if (key !in DERIVED_NAMES || key in prepared)
+                throw WatchDocumentException.SaveFailed("派生资源仅允许唯一的 preview.jpg 和 preview_dim.jpg。")
+            if (bytes.isEmpty() || bytes.size > 16 * 1024 * 1024)
+                throw WatchDocumentException.SaveFailed("缩略图数据为空或超过 16 MB：$name")
+            val snapshot = bytes.copyOf()
+            try {
+                MemoryCacheImageInputStream(ByteArrayInputStream(snapshot)).use { stream ->
+                    val readers = ImageIO.getImageReaders(stream)
+                    if (!readers.hasNext()) throw IllegalArgumentException("无法解码图像")
+                    val reader = readers.next()
+                    try {
+                        reader.input = stream
+                        if (!reader.formatName.equals("JPEG", true) || reader.getWidth(0) !in 1..4096 || reader.getHeight(0) !in 1..4096)
+                            throw IllegalArgumentException("必须为不超过 4096×4096 的 JPEG")
+                        reader.read(0) ?: throw IllegalArgumentException("图像内容不完整")
+                    } finally { reader.dispose() }
+                }
+            } catch (e: Exception) { throw WatchDocumentException.SaveFailed("缩略图校验失败：$name，${e.message}", e) }
+            prepared[key] = snapshot
+        }
+        return prepared.mapValues { (_, bytes) -> stageBlob(session.home, bytes) }
+    }
+
+    private fun validateDerivedHashes(derived: Map<String, String>) {
+        if (derived.any { (name, hash) -> name !in DERIVED_NAMES || !Regex("[a-f0-9]{64}").matches(hash) })
+            throw WatchDocumentException.RecoveryFailed("派生缩略图索引无效。")
+    }
+
+    private fun writeBlob(session: DocumentSession, hash: String, name: String, out: OutputStream) {
+        val blob = session.home.resolve("blobs").resolve(hash)
+        if (!Files.isRegularFile(blob) || hashFile(blob) != hash)
+            throw WatchDocumentException.SaveFailed("派生缩略图缺失或损坏，请重新生成后保存：$name")
+        Files.newInputStream(blob).use { it.copyTo(out) }
+    }
+
+    private fun materializeDerivedResources(session: DocumentSession) {
+        if (session.savedDerivedResources.isEmpty()) return
+        val original = session.home.resolve("original.zip")
+        val names = if (Files.isRegularFile(original)) ZipFile(original.toFile()).use { zip ->
+            zip.entries().asSequence().associate { it.name.lowercase(Locale.ROOT) to it.name }
+        } else emptyMap()
+        session.savedDerivedResources.forEach { (key, hash) ->
+            val blob = session.home.resolve("blobs").resolve(hash)
+            if (!Files.isRegularFile(blob) || hashFile(blob) != hash) throw WatchDocumentException.RecoveryFailed("派生缩略图缺失或损坏：$key")
+            val destination = session.workDir.resolve(names[key] ?: key)
+            Files.copy(blob, destination, REPLACE_EXISTING)
+        }
+    }
+
+    companion object {
+        private val DERIVED_NAMES = setOf("preview.jpg", "preview_dim.jpg")
+        private fun defaultWorkspace(): Path = Path.of(System.getenv("LOCALAPPDATA") ?: System.getProperty("user.home"), "WFTools-PC", "workspace")
+        internal fun signature(snapshot: DocumentSnapshot): String = hashBytes((snapshot.xml + "\u0000" +
+            snapshot.importedAssets.toSortedMap().entries.joinToString("\u0000") { "${it.key}=${it.value}" } +
+            "\u0000script:" + (snapshot.scriptOverride?.let { "override:$it" } ?: "original")).toByteArray(Charsets.UTF_8))
+        internal fun hashBytes(data: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it) }
+        internal fun hashFile(path: Path): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            Files.newInputStream(path).use { input -> val buffer = ByteArray(64 * 1024); while (true) {
+                val n = input.read(buffer); if (n < 0) break; digest.update(buffer, 0, n)
+            } }
+            return digest.digest().joinToString("") { "%02x".format(it) }
+        }
+        internal fun validateArchiveName(name: String) {
+            val parts = name.trimEnd('/').split('/')
+            val reserved = Regex("(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\\..*)?")
+            if (name.isBlank() || name.startsWith('/') || name.contains('\\') || parts.any { part ->
+                    part.isEmpty() || part == "." || part == ".." || part.last() in " ." || reserved.matches(part) ||
+                    part.any { it.code < 32 || it in ":*?\"<>|" }
+                }) throw WatchDocumentException.UnsafeArchive("压缩包路径不安全或不适用于 Windows：$name")
+        }
+        internal fun validateSnapshot(state: DocumentSnapshot) {
+            val doc = WatchXml.parse(state.xml); WatchXml.validate(doc)
+            if (WatchXml.layers(doc).size != state.layerIds.size || state.layerIds.toSet().size != state.layerIds.size)
+                throw WatchDocumentException.RecoveryFailed("草稿图层索引不完整。")
+            state.importedAssets.forEach { (name, blob) -> validateArchiveName(name)
+                if (!Regex("[a-f0-9]{64}").matches(blob)) throw WatchDocumentException.RecoveryFailed("草稿资源索引无效。")
+            }
+        }
+    }
+}
