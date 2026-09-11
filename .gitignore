@@ -66,6 +66,10 @@ CTestTestfile.cmake
 # User requested
 decompiled/
 decompilled/
-docs/
+docs/*
+!docs/windows/
 .vscode/
 example/
+.local/
+artifacts/
+.worktrees/
