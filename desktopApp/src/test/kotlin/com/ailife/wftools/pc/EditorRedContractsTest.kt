@@ -78,11 +78,10 @@ class EditorRedContractsTest {
         assertEquals(false,devicePreview!!.invoke(defaults))
         assertEquals(true,handles!!.invoke(defaults))
     }
-    @Test fun `preview canvas note points to shared global settings without stale document state`() {
+    @Test fun `preview omits the redundant canvas interaction note`() {
         val editor=editor()
         compose.setContent { WFToolsTheme(false) { PreviewSettingsPanel(editor,Modifier.width(380.dp).height(760.dp)) } }
-        compose.onNodeWithText("首页“设置”",substring=true).performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("当前使用",substring=true).assertDoesNotExist()
+        compose.onNodeWithText("画布交互",substring=true).assertDoesNotExist()
     }
     @Test fun `custom device size stays selected and exposes editable dimensions`() {
         val editor=editor()

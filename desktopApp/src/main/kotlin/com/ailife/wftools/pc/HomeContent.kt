@@ -145,6 +145,13 @@ internal fun performFileAssociationAction(
         Text("外观",style=MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement=Arrangement.spacedBy(6.dp)){listOf("跟随系统","浅色","深色").forEach{value->FilterChip(selected=theme==value,onClick={onTheme(when(value){"浅色"->ThemePreference.LIGHT;"深色"->ThemePreference.DARK;else->ThemePreference.SYSTEM})},label={Text(value)})}}
         HorizontalDivider()
+        Text("语言",style=MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+            FilterChip(selected=DesktopI18n.language()==DesktopLanguage.CHINESE,onClick={DesktopI18n.setLanguage(DesktopLanguage.CHINESE)},label={Text("中文")})
+            FilterChip(selected=DesktopI18n.language()==DesktopLanguage.ENGLISH,onClick={DesktopI18n.setLanguage(DesktopLanguage.ENGLISH)},label={Text("English")})
+        }
+        Text("界面语言只影响 WFTools-PC 文案，不会修改表盘内容。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        HorizontalDivider()
         Text("画布操作",style=MaterialTheme.typography.titleSmall)
         HomeCanvasInputSwitch("中键拖动画布",canvasInput.middleButtonPan,"home-middle-button-pan-toggle"){onCanvasInput(canvasInput.copy(middleButtonPan=it))}
         HomeCanvasInputSwitch("右键拖动画布",canvasInput.rightButtonPan,"home-right-button-pan-toggle"){onCanvasInput(canvasInput.copy(rightButtonPan=it))}

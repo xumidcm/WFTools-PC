@@ -16,6 +16,7 @@ import com.ailife.wftools.pc.preview.WatchPreview
 import kotlinx.coroutines.*
 import org.junit.After
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -25,6 +26,7 @@ class EditorDesktopUiTest {
     @get:Rule val temp = TemporaryFolder()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var doc: DocumentController? = null
+    @Before fun useChineseFixtureLocale() { DesktopI18n.setLanguage(DesktopLanguage.CHINESE) }
     @After fun close() { doc?.let { it.render.close(); it.session.close() }; scope.cancel() }
     private fun editor(saved: Boolean = false): DocumentController = runBlocking {
         val store = WatchDocumentStore(temp.newFolder("work").toPath())
@@ -128,7 +130,7 @@ class EditorDesktopUiTest {
     @Test fun `global script editor owns editing shortcuts and control S saves draft before archive`() {
         val editor=editor(saved=true);val app=EditorApplicationModel(scope,EditorPreferences(temp.newFolder("app-script").toPath()));val commands=CommandDispatcher(app,editor){}
         compose.setContent { WFToolsTheme(false) { Box(Modifier.width(420.dp).height(760.dp).onPreviewKeyEvent(commands::key)){ProjectPanel(editor,Modifier.fillMaxSize())} } }
-        compose.onNodeWithText("编辑全局脚本").performClick()
+        compose.onNodeWithText(DesktopI18n.text("编辑全局脚本")).performClick()
         val field=compose.onNodeWithTag("global-script-editor");val layers=editor.view.layers.map{it.id};val revision=editor.view.revision
         field.performClick();field.performTextInput("var_owned = 1")
         field.performKeyInput { keyDown(Key.CtrlLeft);pressKey(Key.A);keyUp(Key.CtrlLeft);pressKey(Key.Delete);keyDown(Key.CtrlLeft);pressKey(Key.Z);keyUp(Key.CtrlLeft) }
@@ -185,7 +187,7 @@ class EditorDesktopUiTest {
         val integration=installProjectPanelIntegration(app){requested.add(it)}
         try {
             compose.setContent { WFToolsTheme(false) { ProjectPanel(editor,Modifier.width(380.dp).height(700.dp)) } }
-            compose.onNodeWithText("另存为",substring=false).performScrollTo().assertIsEnabled().performClick()
+            compose.onNodeWithText(DesktopI18n.text("另存为"),substring=false).performScrollTo().assertIsEnabled().performClick()
             compose.runOnIdle { assertEquals(1,requested.size);assertSame(editor,requested.single()) }
         } finally { integration.close() }
     }

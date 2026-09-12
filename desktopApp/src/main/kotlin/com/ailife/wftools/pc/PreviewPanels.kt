@@ -30,10 +30,6 @@ private fun cs(n:String,l:String,off:Pair<String,String>,on:Pair<String,String>)
         PreviewRuntimeControls(doc)
         DevicePreviewControls(doc)
         PreviewSimulationControls(doc)
-        WmParamCard("画布交互") {
-            Text("操作方式可在右上角“更多操作 → 画布设置”中调整；自动吸附、变换控制点和操作状态提示也可在首页“设置”中调整。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("变换控制点开启时显示八向缩放点和旋转拉杆；关闭后使用简洁选框。",style=MaterialTheme.typography.bodySmall)
-        }
     }
 }
 

@@ -451,7 +451,7 @@ class EditorApplicationModel(val scope: CoroutineScope, val preferences: EditorP
                         if(recoveryId != null && existing.session.id != recoveryId) failures.add("此草稿的原文件已在另一个窗口打开。请先关闭该窗口，再恢复草稿；草稿仍然保留。")
                     }
                     else {
-                        val session = withContext(Dispatchers.IO) { when { recoveryId != null -> store.recover(recoveryId); path == null -> store.newDocument(); else -> store.open(path) } }
+                        val session = withContext(Dispatchers.IO) { when { recoveryId != null -> store.recover(recoveryId); path == null -> store.newDocument(DesktopI18n.text("新建表盘")); else -> store.open(path) } }
                         val doc = DocumentController.create(session, store, scope, preferences)
                         documents.add(doc)
                         recordOpened(doc)

@@ -89,7 +89,7 @@ import kotlin.math.roundToInt
                                 val font=assetTargetAttribute(asset)=="font"
                                 EditorLayer("asset:${asset.relative}",if(font)"text" else if(asset.kind=="videos")"video" else "image",mapOf("path" to (if(asset.kind in setOf("images","videos"))asset.relative.substringAfter('/') else asset.relative),"font" to ((if(asset.kind=="fonts_bm")"bm:" else "")+asset.relative.substringAfter('/').substringBeforeLast('.')),"text" to "Aa 12","text_size" to "32","opacity" to "100","color" to "ffffff","alignment" to "cc","display" to "bd"))
                             }
-                            Box(Modifier.semantics{contentDescription="素材预览"}){if(asset.kind=="sfx")Icon(Icons.Default.VolumeUp,null,Modifier.size(38.dp),tint=MaterialTheme.colorScheme.secondary)else LayerThumbnail(doc,thumb,40.dp)}
+                            Box(Modifier.semantics{contentDescription=DesktopI18n.text("素材预览")}){if(asset.kind=="sfx")Icon(Icons.Default.VolumeUp,null,Modifier.size(38.dp),tint=MaterialTheme.colorScheme.secondary)else LayerThumbnail(doc,thumb,40.dp)}
                             Column(Modifier.weight(1f)){Text(asset.relative.substringAfterLast('/'),fontSize=14.sp,fontWeight=FontWeight.SemiBold,maxLines=1,overflow=TextOverflow.Ellipsis);Text(asset.relative,fontSize=12.sp,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)}
                         }
                     }

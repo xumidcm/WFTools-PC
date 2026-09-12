@@ -52,12 +52,13 @@ class WatchDocumentStore(val workspaceRoot: Path = defaultWorkspace()) {
         catch (e: Exception) { throw WatchDocumentException.OpenFailed("无法打开表盘：${e.message}", e) }
     }
 
-    fun newDocument(): DocumentSession {
+    fun newDocument(defaultTitle: String = "新建表盘"): DocumentSession {
         try {
             val id = UUID.randomUUID().toString(); val home = workspaceRoot.resolve(id)
             ensurePrivateDirectory(home)
             Files.createDirectories(home.resolve("content"))
-            val xml = """<?xml version="1.0" encoding="UTF-8"?><Watch name="新建表盘" width="512" height="512" shape="S" bg_color="000000" protection="n"><Layers/></Watch>"""
+            val safeTitle = defaultTitle.ifBlank { "新建表盘" }.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+            val xml = """<?xml version="1.0" encoding="UTF-8"?><Watch name="$safeTitle" width="512" height="512" shape="S" bg_color="000000" protection="n"><Layers/></Watch>"""
             val state = DocumentSnapshot(WatchXml.serialize(WatchXml.parse(xml)), emptyList())
             return DocumentSession(this, id, null, home, "watch.xml", null, state).also { persist(it) }
         } catch (e: WatchDocumentException) { throw e }

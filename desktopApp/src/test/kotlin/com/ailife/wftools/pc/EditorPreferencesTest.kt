@@ -33,6 +33,13 @@ class EditorPreferencesTest {
         preferences.savePreview("face",PreviewPreferences(DevicePreviewSettings(410,502)))
         assertEquals(ThemePreference.DARK,preferences.theme()); assertEquals(panels,preferences.panels()); assertEquals(window,preferences.window())
     }
+    @Test fun `application preferences persist desktop language`() {
+        val dir = temp.newFolder().toPath(); val preferences = EditorPreferences(dir)
+        DesktopI18n.setLanguage(DesktopLanguage.ENGLISH)
+        preferences.saveApplication(ThemePreference.SYSTEM, PanelPreferences(), WindowPreferences())
+        assertEquals(DesktopLanguage.ENGLISH, EditorPreferences(dir).savedLanguage())
+        DesktopI18n.setLanguage(DesktopLanguage.CHINESE)
+    }
     @Test fun `canvas input switches are application wide and survive restart`() {
         val dir=temp.newFolder().toPath();val preferences=EditorPreferences(dir)
         assertEquals(CanvasInputPreferences(),preferences.canvasInput())

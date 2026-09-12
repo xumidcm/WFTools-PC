@@ -36,9 +36,10 @@ fun main(args: Array<String>) {
     if(args.firstOrNull() == "--verify-runtime") kotlin.system.exitProcess(runRuntimeVerification(args.drop(1)))
     val paths = args.filterNot { it.startsWith("--") }.map(Path::of)
     val broker = try { InstanceBroker.openOrForward(paths) } catch (e: Exception) {
-        javax.swing.JOptionPane.showMessageDialog(null, e.message, "WFTools-PC", javax.swing.JOptionPane.ERROR_MESSAGE); return
+        javax.swing.JOptionPane.showMessageDialog(null, e.message?.let(DesktopI18n::text), "WFTools-PC", javax.swing.JOptionPane.ERROR_MESSAGE); return
     } ?: return
     val preferences = EditorPreferences()
+    preferences.savedLanguage()?.let(DesktopI18n::setLanguage)
     val initialTheme = preferences.theme(); val initialPanels = preferences.panels(); val initialWindow = preferences.window()
     try { application {
         val scope = rememberCoroutineScope()

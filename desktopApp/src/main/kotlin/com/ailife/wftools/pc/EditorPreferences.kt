@@ -82,6 +82,7 @@ class EditorPreferences(private val directory: Path = appData().resolve("prefere
         })
     }
     fun theme(): ThemePreference = runCatching { ThemePreference.valueOf(read("application.properties").getProperty("theme", "SYSTEM")) }.getOrDefault(ThemePreference.SYSTEM)
+    fun savedLanguage(): DesktopLanguage? = read("application.properties").getProperty("language")?.let { value -> runCatching { DesktopLanguage.valueOf(value) }.getOrNull() }
     fun panels(): PanelPreferences = read("application.properties").let { PanelPreferences(it.float("left", 272f, 180f, 520f), it.float("right", 348f, 240f, 560f), it.float("bottom", 180f, 160f, 600f)) }
     fun window(): WindowPreferences = read("application.properties").let { WindowPreferences(it.int("width", 1280, 640, 7680), it.int("height", 820, 420, 4320)) }
     fun canvasInput(): CanvasInputPreferences = read("application.properties").let { p -> CanvasInputPreferences(
@@ -96,6 +97,7 @@ class EditorPreferences(private val directory: Path = appData().resolve("prefere
     @Synchronized fun saveApplication(theme: ThemePreference, panels: PanelPreferences, window: WindowPreferences, canvasInput: CanvasInputPreferences) = write("application.properties", Properties().apply {
         setProperty("theme", theme.name); setProperty("left", panels.left.toString()); setProperty("right", panels.right.toString()); setProperty("bottom", panels.bottom.toString())
         setProperty("width", window.width.toString()); setProperty("height", window.height.toString())
+        setProperty("language", DesktopI18n.language().name)
         setProperty("middleButtonPan",canvasInput.middleButtonPan.toString());setProperty("rightButtonPan",canvasInput.rightButtonPan.toString());setProperty("wheelScalesSelectedLayer",canvasInput.wheelScalesSelectedLayer.toString())
         setProperty("canvasSnapping",canvasInput.snapping.toString());setProperty("canvasTransformHandles",canvasInput.showTransformHandles.toString());setProperty("canvasOperationStatus",canvasInput.showOperationStatus.toString())
     })

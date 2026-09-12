@@ -11,6 +11,7 @@ import java.awt.datatransfer.DataFlavor
 import java.awt.dnd.*
 import java.io.FilenameFilter
 import java.nio.file.Path
+import com.ailife.wftools.pc.DesktopI18n
 import javax.swing.JOptionPane
 import javax.swing.SwingUtilities
 import javax.imageio.ImageIO
@@ -39,11 +40,11 @@ private fun chooseOpenWithNativeDialog(owner: Component?, title: String, extensi
     dialog.isVisible = true
     return dialog.files?.map { it.toPath() }.orEmpty()
 }
-fun chooseWatchFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, "打开 WatchMaker 表盘", "watch")
-fun chooseAssets(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, "导入图片、视频或字体", "png,jpg,jpeg,gif,webp,bmp,mp4,webm,mov,m4v,avi,mkv,ttf,otf,fnt")
-fun chooseAudioFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, "添加音频资源", "mp3,wav,ogg,m4a,aac,flac")
+fun chooseWatchFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, DesktopI18n.text("打开 WatchMaker 表盘"), "watch")
+fun chooseAssets(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, DesktopI18n.text("导入图片、视频或字体"), "png,jpg,jpeg,gif,webp,bmp,mp4,webm,mov,m4v,avi,mkv,ttf,otf,fnt")
+fun chooseAudioFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, DesktopI18n.text("添加音频资源"), "mp3,wav,ogg,m4a,aac,flac")
 fun chooseSavePath(owner: Component?, source: Path?, title: String, allowExisting: Boolean = true): Path? {
-    val dialog = nativeFileDialog(owner, "保存 WatchMaker 表盘", FileDialog.SAVE).apply {
+    val dialog = nativeFileDialog(owner, DesktopI18n.text("保存 WatchMaker 表盘"), FileDialog.SAVE).apply {
         filenameFilter = FilenameFilter { _, name -> name.endsWith(".watch", true) }
         file = source?.fileName?.toString() ?: title.replace(Regex("[<>:\"/\\\\|?*]"), "_") + ".watch"
     }
@@ -51,11 +52,11 @@ fun chooseSavePath(owner: Component?, source: Path?, title: String, allowExistin
     val selected = dialog.file ?: return null
     val parent = dialog.directory ?: return null
     val file = if (selected.endsWith(".watch", true)) java.io.File(parent, selected) else java.io.File(parent, selected + ".watch")
-    if (file.exists() && (!allowExisting || JOptionPane.showConfirmDialog(owner, "“${file.name}”已存在，要替换它吗？", "确认保存", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.YES_OPTION)) return null
+    if (file.exists() && (!allowExisting || JOptionPane.showConfirmDialog(owner, DesktopI18n.text("“${file.name}”已存在，要替换它吗？"), DesktopI18n.text("确认保存"), JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.YES_OPTION)) return null
     return file.toPath()
 }
 fun chooseCapturePath(owner: Component?, title: String, extension: String, description: String): Path? {
-    val dialog = nativeFileDialog(owner, description, FileDialog.SAVE).apply {
+    val dialog = nativeFileDialog(owner, DesktopI18n.text(description), FileDialog.SAVE).apply {
         filenameFilter = FilenameFilter { _, name -> name.endsWith(".$extension", true) }
         file = title.replace(Regex("[<>:\"/\\\\|?*]"), "_") + "." + extension
     }
@@ -63,7 +64,7 @@ fun chooseCapturePath(owner: Component?, title: String, extension: String, descr
     val selected = dialog.file ?: return null
     val parent = dialog.directory ?: return null
     val file = if (selected.endsWith(".$extension", true)) java.io.File(parent, selected) else java.io.File(parent, selected + ".$extension")
-    if (file.exists() && JOptionPane.showConfirmDialog(owner, "“${file.name}”已存在，要替换它吗？", "确认保存", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.YES_OPTION) return null
+    if (file.exists() && JOptionPane.showConfirmDialog(owner, DesktopI18n.text("“${file.name}”已存在，要替换它吗？"), DesktopI18n.text("确认保存"), JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.YES_OPTION) return null
     return file.toPath()
 }
 

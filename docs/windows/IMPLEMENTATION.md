@@ -8,6 +8,7 @@ Baseline: WFTools 201cde43171b3481cd4ed2ed1e73b20e3daa7400. Flue geometry 2f3a1d
 - [x] Lossless watch read/write and session isolation
 - [x] Flue viewport contract and migrated preview/media implementation
 - [x] Keyboard, selection, context menu and drop command implementation
+- [x] Desktop Windows/Linux i18n with Chinese/English resources and persisted language choice
 - [ ] Single instance routing, crash recovery, packaging and Open With
 - [ ] Sample, synthetic cases, UI/DPI/performance and installer verification
 

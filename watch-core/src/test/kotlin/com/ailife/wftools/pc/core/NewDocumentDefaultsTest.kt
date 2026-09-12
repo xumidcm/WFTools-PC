@@ -22,6 +22,14 @@ class NewDocumentDefaultsTest {
         }
     }
 
+    @Test fun newDocumentAcceptsLocalizedDefaultTitle() {
+        val root=Files.createTempDirectory("watch-localized-title-")
+        val store=WatchDocumentStore(root.resolve("sessions"))
+        store.newDocument("New Watch Face").use { session ->
+            assertEquals("New Watch Face", session.toWatchProject().title)
+        }
+    }
+
     @Test fun `linux document workspace is private when POSIX permissions are available`() {
         val root=Files.createTempDirectory("watch-private-workspace-")
         if(!Files.getFileStore(root).supportsFileAttributeView("posix"))return
