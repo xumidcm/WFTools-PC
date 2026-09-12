@@ -4,9 +4,11 @@ import io.github.taoguan.luaj.Globals
 import io.github.taoguan.luaj.LuaTable
 import io.github.taoguan.luaj.LuaValue
 import io.github.taoguan.luaj.Varargs
+import io.github.taoguan.luaj.compiler.LuaC
 import io.github.taoguan.luaj.lib.OneArgFunction
 import io.github.taoguan.luaj.lib.TwoArgFunction
 import io.github.taoguan.luaj.lib.VarArgFunction
+import java.io.ByteArrayInputStream
 
 /**
  * Runs a WatchMaker global script (`scripts/script.txt`) as a real Lua chunk and
@@ -184,6 +186,46 @@ class WmScriptRuntime {
         return runChunk(preprocess(script))
     }
 
+    /**
+     * Compile only, using the same tag preprocessing as [runScript]. No chunk is
+     * installed or executed, including on success. Error positions refer to the
+     * original source; LuaJ reports a token rather than an exact parser column.
+     */
+    fun validateScript(source: String): String? {
+        if (source.isBlank()) return null
+        val positions = ArrayList<Int>(source.length)
+        val processed = preprocess(source, positions)
+        val bytes = processed.toByteArray(Charsets.UTF_8)
+        val input = object : ByteArrayInputStream(bytes) {
+            fun consumed(): Int = pos
+        }
+        return try {
+            // LuaC creates a Prototype only; it never sees this instance's globals.
+            LuaC.instance.compile(input, "@wm_script")
+            null
+        } catch (error: Exception) {
+            val message = error.message ?: error.javaClass.simpleName
+            val generatedLine = Regex(":(\\d+):").find(message)?.groupValues?.get(1)?.toIntOrNull()
+            val consumed = String(bytes, 0, input.consumed(), Charsets.UTF_8).length.coerceAtMost(processed.length)
+            val token = Regex("near '([^']*)'").find(message)?.groupValues?.get(1)
+            val lineStart = if (generatedLine == null) 0 else {
+                var offset = 0
+                repeat((generatedLine - 1).coerceAtLeast(0)) {
+                    offset = (processed.indexOf('\n', offset).takeIf { it >= 0 }?.plus(1) ?: processed.length)
+                }
+                offset
+            }
+            val tokenOffset = if (token != null && token != "<eof>" && token.isNotEmpty()) {
+                processed.lastIndexOf(token, (consumed - 1).coerceAtLeast(0)).takeIf { it >= lineStart }
+            } else null
+            val generatedOffset = tokenOffset ?: if (token == "<eof>") processed.length else (consumed - 1).coerceAtLeast(lineStart)
+            val originalOffset = positions.getOrNull(generatedOffset) ?: source.length
+            val line = source.take(originalOffset).count { it == '\n' } + 1
+            val column = originalOffset - source.lastIndexOf('\n', (originalOffset - 1).coerceAtLeast(-1))
+            "Lua 第 $line 行，第 $column 列附近：$message"
+        }
+    }
+
     /** Execute a `script:` tap-action body in the running script's state. */
     @Synchronized fun runSnippet(code: String, tagResolver: (String) -> String = this.tagResolver): Boolean {
         this.tagResolver = tagResolver
@@ -290,8 +332,12 @@ class WmScriptRuntime {
 
     // ── {tag} transpilation ───────────────────────────────────────────────────
 
-    private fun preprocess(src: String): String {
+    private fun preprocess(src: String, positions: MutableList<Int>? = null): String {
         val sb = StringBuilder(src.length)
+        fun append(c: Char, originalIndex: Int) {
+            sb.append(c)
+            positions?.add(originalIndex)
+        }
         var inStr = false
         var quote = ' '
         var i = 0
@@ -300,12 +346,12 @@ class WmScriptRuntime {
             val next = if (i + 1 < src.length) src[i + 1] else '\u0000'
             when {
                 inStr -> {
-                    sb.append(c)
-                    if (c == '\\' && next != '\u0000') { sb.append(next); i += 2; continue }
+                    append(c, i)
+                    if (c == '\\' && next != '\u0000') { append(next, i + 1); i += 2; continue }
                     if (c == quote) inStr = false
                     i++
                 }
-                c == '"' || c == '\'' -> { inStr = true; quote = c; sb.append(c); i++ }
+                c == '"' || c == '\'' -> { inStr = true; quote = c; append(c, i); i++ }
                 c == '-' && next == '-' -> {
                     // comment — drop through to end of line (keep the newline)
                     while (i < src.length && src[i] != '\n') i++
@@ -317,14 +363,17 @@ class WmScriptRuntime {
                         // Only `{name}` looks like a tag reference; leave Lua table
                         // constructors ({1,2}, {k=v}) untouched.
                         if (inner.isNotEmpty() && !inner.contains('{') && TAG_NAME.matches(inner)) {
-                            sb.append("wm_tag('{").append(inner).append("}')")
+                            "wm_tag('{".forEach { append(it, i) }
+                            val nameStart = src.indexOf(inner, i + 1)
+                            inner.forEachIndexed { index, ch -> append(ch, nameStart + index) }
+                            "}')".forEach { append(it, close) }
                             i = close + 1
                             continue
                         }
                     }
-                    sb.append(c); i++
+                    append(c, i); i++
                 }
-                else -> { sb.append(c); i++ }
+                else -> { append(c, i); i++ }
             }
         }
         return sb.toString()

@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.compose.desktop)
 }
+tasks.test { systemProperty("watch.sample", providers.gradleProperty("watchSamplePath").orNull ?: "") }
 kotlin { jvmToolchain(21) }
 dependencies {
     api(project(":watch-core"))

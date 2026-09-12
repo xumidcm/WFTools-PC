@@ -192,14 +192,27 @@ class WatchDocumentStoreTest {
         }
     }
     @Test fun replaceAssetsForManyLayersIsOneAtomicUndoStep() {
-        store.open(archive()).use { s ->
+        store.open(archive("<Watch name='Replace'><Layer type='image' path='old.png'/><Layer type='image'/></Watch>")).use { s ->
             val replacement=dir.resolve("replacement.png"); Files.write(replacement,byteArrayOf(5))
             val ids=s.layers.map { it.id }.toSet(); val before=s.layers
             s.replaceAssetForLayers(ids,listOf(replacement))
             assertEquals(1,s.layers.map { it.attrs["path"] }.toSet().size); assertNotEquals(before,s.layers)
             s.undo(); assertEquals(before,s.layers); assertFalse(s.canUndo)
-            assertThrows(WatchDocumentException.AssetImportFailed::class.java) { s.replaceAssetForLayers(ids,listOf(replacement,dir.resolve("missing.png"),replacement)) }
+            assertThrows(WatchDocumentException.AssetImportFailed::class.java) { s.replaceAssetForLayers(ids,listOf(replacement,dir.resolve("missing.png"))) }
             assertEquals(before,s.layers)
+        }
+    }
+    @Test fun multiLayerAttributeBatchIsOneUndoAndPreservesExpressions() {
+        store.open(archive()).use { session ->
+            val before=session.layers;val first=before[0].id;val second=before[1].id
+            session.setLayerAttributes(mapOf(first to mapOf("x" to "({dh}*2)+3", "width" to "120"),second to mapOf("y" to "7", "height" to "150")))
+            assertEquals("({dh}*2)+3",session.layers[0].attrs["x"]);assertEquals("150",session.layers[1].attrs["height"])
+            session.undo();assertEquals(before,session.layers);assertFalse(session.canUndo)
+            val revision=session.revision
+            session.setLayerAttributes(emptyMap());session.setLayerAttributes(mapOf(first to mapOf("text" to "A")))
+            assertEquals(revision,session.revision)
+            assertThrows(WatchDocumentException.InvalidCommand::class.java) { session.setLayerAttributes(mapOf("missing" to emptyMap())) }
+            assertEquals(before,session.layers)
         }
     }
     @Test fun optionalRealSampleUsesCopyAndKeepsInputImmutable() {

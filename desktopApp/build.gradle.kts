@@ -23,11 +23,12 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi)
             packageName = "WFTools-PC"
-            packageVersion = "0.1.0"
+            packageVersion = "0.1.1"
             description = "WatchMaker desktop editor"
             vendor = "WFTools-PC"
             modules("java.desktop", "java.xml", "java.logging", "java.net.http", "jdk.unsupported")
             windows {
+                iconFile.set(project.file("../packaging/WFTools-PC.ico"))
                 perUserInstall = true
                 menu = true
                 shortcut = true

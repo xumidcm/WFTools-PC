@@ -73,7 +73,7 @@ object WmExpressionEval {
             // Match CloX __wn / Lua "%.6g": ~6 significant digits, trailing
             // zeros trimmed (was "%.4f" — 4 decimals, which diverges for
             // values >1, e.g. 123.456789 → "123.4568" vs CloX "123.457").
-            val g = "%.6g".format(value)
+            val g = "%.6g".format(java.util.Locale.ROOT, value)
             if (g.contains('.') && !g.contains('e') && !g.contains('E'))
                 g.trimEnd('0').trimEnd('.')
             else g

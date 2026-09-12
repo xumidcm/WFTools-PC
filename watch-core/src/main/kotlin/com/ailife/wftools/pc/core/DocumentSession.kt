@@ -7,11 +7,12 @@ import java.math.BigDecimal
 import java.nio.file.*
 import java.util.Locale
 import java.util.UUID
+import java.util.zip.ZipFile
 import javax.imageio.ImageIO
 
 /** Single-thread confined editor state. Snapshots retain raw XML, resource identities and selection. */
 class DocumentSession internal constructor(
-    private val store: WatchDocumentStore,
+    internal val store: WatchDocumentStore,
     val id: String,
     var sourcePath: Path?,
     internal val home: Path,
@@ -25,6 +26,11 @@ class DocumentSession internal constructor(
     internal var savedDerivedResources: Map<String, String> = emptyMap()
     internal val undoStack = ArrayDeque<DocumentSnapshot>()
     internal val redoStack = ArrayDeque<DocumentSnapshot>()
+    internal val snapshotHashes = java.util.IdentityHashMap<DocumentSnapshot, String>()
+    internal var committedSnapshotRefs: Set<String> = emptySet()
+    internal val pendingSnapshotGc = linkedSetOf<String>()
+    internal var snapshotGcNeedsScan = true
+    internal var snapshotGcCommits = 0
     private var closed = false
     private var inTransaction = false
     var revision: Long = 0L
@@ -61,6 +67,15 @@ class DocumentSession internal constructor(
     fun setAttribute(ids: Set<String>, key: String, value: String) {
         requireIds(ids)
         change { doc, _, _ -> WatchXml.layers(doc).forEachIndexed { index, layer -> if (state.layerIds[index] in ids) layer.setAttribute(key, value) } }
+    }
+
+    /** Applies one completed multi-layer gesture as one undoable command. */
+    fun setLayerAttributes(updates: Map<String, Map<String, String>>) {
+        requireIds(updates.keys)
+        if (updates.values.all { it.isEmpty() }) return
+        change { doc, ids, _ -> WatchXml.layers(doc).zip(ids).forEach { (layer, id) ->
+            updates[id]?.forEach { (key, value) -> layer.setAttribute(key, value) }
+        } }
     }
 
     fun addLayer(type: String) {
@@ -101,12 +116,14 @@ class DocumentSession internal constructor(
         if (ids.isEmpty()) return
         if (paths.size != 1 && paths.size != ids.size)
             throw WatchDocumentException.AssetImportFailed("请选择一个共享资源，或为每个选中图层选择一个资源。")
+        val orderedLayers = layers.filter { it.id in ids }
+        orderedLayers.forEachIndexed { index, layer -> AssetKinds.validateReplacement(layer, attribute, paths[if (paths.size == 1) 0 else index]) }
         transaction {
             val imported = importAssetsInternal(paths, false, 0.0, 0.0)
             val ordered = state.layerIds.filter { it in ids }
             ordered.forEachIndexed { index, id ->
                 val name = imported[if (imported.size == 1) 0 else index]
-                val value = if (attribute == "font") (if (name.startsWith("fonts_bm/")) "bm:" else "") + name.substringAfter('/').substringBeforeLast('.')
+                val value = if (attribute == "font" || attribute == "font2") (if (name.startsWith("fonts_bm/")) "bm:" else "") + name.substringAfter('/').substringBeforeLast('.')
                     else name.substringAfter('/')
                 setAttribute(setOf(id), attribute, value)
             }
@@ -166,22 +183,14 @@ class DocumentSession internal constructor(
     fun undo() = navigateHistory(undoStack, redoStack)
     fun redo() = navigateHistory(redoStack, undoStack)
 
-    fun copySelection(): String {
-        val doc = document(); val copy = WatchXml.parse("<WFToolsLayers version=\"1\"/>")
-        WatchXml.layers(doc).zip(state.layerIds).filter { it.second in selection.selected }.forEach { (layer, _) ->
-            copy.documentElement.appendChild(copy.importNode(layer, true))
-        }
-        return WatchXml.serialize(copy)
-    }
+    fun copySelection(): String = WatchClipboard.copy(this)
 
     fun pasteLayers(serialized: String) {
-        val copied = try { WatchXml.parse(serialized) } catch (e: Exception) { throw WatchDocumentException.InvalidCommand("剪贴板中没有有效的表盘图层。", e) }
-        if (copied.documentElement.tagName != "WFToolsLayers") throw WatchDocumentException.InvalidCommand("剪贴板格式不是 WFTools 图层。")
-        val incoming = copied.documentElement.elements()
-        if (incoming.any { !it.tagName.equals("Layer", true) } || incoming.size > 5000)
-            throw WatchDocumentException.InvalidCommand("剪贴板图层内容无效或数量过多。")
+        val prepared = WatchClipboard.prepare(this, serialized)
+        val incoming = prepared.document.documentElement.elements()
         if (incoming.isEmpty()) return
-        change { doc, ids, _ ->
+        change { doc, ids, assets ->
+            assets.putAll(prepared.assets)
             val container = layerContainer(doc); val newIds = incoming.map { layer ->
                 container.appendChild(doc.importNode(layer, true)); UUID.randomUUID().toString()
             }
@@ -194,6 +203,50 @@ class DocumentSession internal constructor(
         importAssetsInternal(paths, createLayers, x, y)
     }
 
+    /** Imports only resource entries from another WatchMaker archive. */
+    fun importWatchAssets(source: Path,prepareAsset:(Path)->Path={it}) {
+        ensureOpen()
+        val archive = source.toAbsolutePath().normalize()
+        if (!Files.isRegularFile(archive)) throw WatchDocumentException.AssetImportFailed("找不到要导入的表盘：$archive")
+        store.validateArchive(archive)
+        val staging = Files.createTempDirectory(home, "watch-import-")
+        try {
+            val candidates = mutableListOf<Path>()
+            ZipFile(archive.toFile()).use { zip ->
+                zip.entries().asSequence().forEach { entry ->
+                    if (entry.isDirectory) return@forEach
+                    val normalized = entry.name.replace('\\', '/')
+                    val folder = normalized.substringBefore('/', "").lowercase(Locale.ROOT)
+                    val extension = AssetKinds.extension(normalized)
+                    val accepted = when (folder) {
+                        "images" -> extension in AssetKinds.images
+                        "videos" -> extension in AssetKinds.videos
+                        "fonts" -> extension in setOf("ttf", "otf")
+                        "fonts_bm" -> extension == "fnt" || extension in AssetKinds.images
+                        "sfx", "sounds" -> extension in AssetKinds.sounds
+                        else -> false
+                    }
+                    if (!accepted) return@forEach
+                    val destination = staging.resolve(normalized).normalize()
+                    if (!destination.startsWith(staging)) throw WatchDocumentException.AssetImportFailed("表盘资源路径无效：${entry.name}")
+                    Files.createDirectories(destination.parent)
+                    zip.getInputStream(entry).use { input -> Files.copy(input, destination) }
+                    if (folder != "fonts_bm" || extension == "fnt") candidates.add(destination)
+                }
+            }
+            importAssetsInternal(candidates.map(prepareAsset), createLayers = true, x = 0.0, y = 0.0)
+        } finally {
+            Files.walk(staging).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) } }
+        }
+    }
+
+    fun deleteAsset(relativePath: String) {
+        ensureOpen()
+        val deletion = WatchClipboard.prepareDeletion(this, relativePath)
+        commit(state.copy(importedAssets = state.importedAssets + (deletion.first to deletion.second),
+            removedAssets = state.removedAssets.orEmpty() + deletion.first))
+    }
+
     private fun importAssetsInternal(paths: List<Path>, createLayers: Boolean, x: Double, y: Double): List<String> {
         ensureOpen()
         if (paths.isEmpty()) return emptyList()
@@ -201,6 +254,7 @@ class DocumentSession internal constructor(
         try {
             val names = Files.walk(workDir).use { stream -> stream.filter { Files.isRegularFile(it) }.map { workDir.relativize(it).toString().replace('\\', '/').lowercase(Locale.ROOT) }.toList().toMutableSet() }
             names.addAll(state.importedAssets.keys.map { it.lowercase(Locale.ROOT) })
+            names.addAll(state.removedAssetKeys())
             val additions = LinkedHashMap<String, ByteArray>()
             val primaryNames = mutableListOf<String>()
             val newLayers = mutableListOf<Pair<String, Map<String, String>>>()
@@ -235,6 +289,7 @@ class DocumentSession internal constructor(
                     "mp4", "webm", "mov", "m4v", "avi", "mkv" -> "videos"
                     "ttf", "otf" -> "fonts"
                     "fnt" -> "fonts_bm"
+                    "mp3", "wav", "ogg", "m4a", "aac", "flac" -> "sfx"
                     else -> throw WatchDocumentException.AssetImportFailed("不支持的资源类型 .$ext；请选择图片、视频、TTF/OTF 字体或 BMFont .fnt。")
                 }
                 val name = reserve(folder, path.fileName.toString())
@@ -260,7 +315,7 @@ class DocumentSession internal constructor(
                     data = descriptor.toByteArray(Charsets.UTF_8)
                 }
                 additions[name] = data
-                if (createLayers) {
+                if (createLayers && folder != "sfx") {
                     val attrs = linkedMapOf("x" to number(x), "y" to number(y), "opacity" to "100", "rotation" to "0", "display" to "bd", "alignment" to "cc")
                     val type = if (folder == "images") {
                         attrs["path"] = name.substringAfter('/')
@@ -316,7 +371,18 @@ class DocumentSession internal constructor(
     internal fun materializeAssets(snapshot: DocumentSnapshot, previous: DocumentSnapshot = state, fullVerification: Boolean = false) {
         // Ordinary text/position edits must not reread or recopy large media.
         // Explicit recovery verifies all blobs; saves verify the exported blobs.
-        val changed = if (fullVerification) snapshot.importedAssets else snapshot.importedAssets.filter { (name, hash) -> previous.importedAssets[name] != hash }
+        val removed = snapshot.removedAssetKeys(); val previousRemoved = previous.removedAssetKeys()
+        val visible = snapshot.importedAssets.filterKeys { it.lowercase(Locale.ROOT) !in removed }
+        val previousVisible = previous.importedAssets.filterKeys { it.lowercase(Locale.ROOT) !in previousRemoved }
+        val changed = (if (fullVerification) visible else visible.filter { (name, hash) -> previousVisible[name] != hash }).toMutableMap()
+        // A deleted original asset has its immutable backup in the deleting
+        // snapshot, even when the prior (undo) snapshot did not import that file.
+        previous.removedAssets.orEmpty().filter { it.lowercase(Locale.ROOT) !in removed }.forEach { name ->
+            val backup = snapshot.importedAssets.entries.firstOrNull { it.key.equals(name, true) }?.value
+                ?: previous.importedAssets.entries.firstOrNull { it.key.equals(name, true) }?.value
+                ?: throw WatchDocumentException.RecoveryFailed("删除素材的撤销备份缺失：$name")
+            changed[name] = backup
+        }
         changed.forEach { (name, hash) ->
             WatchDocumentStore.validateArchiveName(name)
             val from = home.resolve("blobs").resolve(hash)
@@ -324,14 +390,14 @@ class DocumentSession internal constructor(
         }
         changed.forEach { (name, hash) ->
             val from = home.resolve("blobs").resolve(hash)
-            val destination = workDir.resolve(name); Files.createDirectories(destination.parent)
-            Files.copy(from, destination, StandardCopyOption.REPLACE_EXISTING)
+            copyWorkingAsset(from, name)
         }
         // Only imports introduced by this session are removable. Original archive
         // resources, including unknown and orphan files, never enter this set.
-        (previous.importedAssets.keys - snapshot.importedAssets.keys).forEach { name ->
-            WatchDocumentStore.validateArchiveName(name)
-            Files.deleteIfExists(workDir.resolve(name))
+        val toRemove = (previousVisible.keys - visible.keys).filterNot { name -> name in changed } +
+            (if (fullVerification) snapshot.removedAssets.orEmpty() else snapshot.removedAssets.orEmpty().filter { it.lowercase(Locale.ROOT) !in previousRemoved })
+        toRemove.distinct().forEach { name ->
+            Files.deleteIfExists(workingAssetPath(name))
         }
         if (fullVerification || snapshot.scriptOverride != previous.scriptOverride) {
             val script = workDir.resolve(scriptEntryName())
@@ -358,7 +424,7 @@ class DocumentSession internal constructor(
         val doc = document(); val ids = state.layerIds.toMutableList(); val assets = state.importedAssets.toMutableMap()
         val result = try { block(doc, ids, assets) } catch (e: WatchDocumentException) { throw e }
             catch (e: Exception) { throw WatchDocumentException.InvalidCommand("编辑内容无效：${e.message}", e) }
-        val next = DocumentSnapshot(WatchXml.serialize(doc), ids, (result as? LayerSelection) ?: selection, assets, state.scriptOverride)
+        val next = DocumentSnapshot(WatchXml.serialize(doc), ids, (result as? LayerSelection) ?: selection, assets, state.scriptOverride, state.removedAssets)
         commit(next)
     }
 
@@ -371,7 +437,7 @@ class DocumentSession internal constructor(
     }
 
     private fun commit(next: DocumentSnapshot) {
-        if (next.xml == state.xml && next.importedAssets == state.importedAssets && next.layerIds == state.layerIds && next.scriptOverride == state.scriptOverride) return
+        if (next.xml == state.xml && next.importedAssets == state.importedAssets && next.layerIds == state.layerIds && next.scriptOverride == state.scriptOverride && next.removedAssetKeys() == state.removedAssetKeys()) return
         WatchDocumentStore.validateSnapshot(next)
         if (inTransaction) { state = next; return }
         val previous = state; val oldUndo = undoStack.toList(); val oldRedo = redoStack.toList(); val oldRevision = revision
@@ -406,6 +472,25 @@ class DocumentSession internal constructor(
         return if (numeric != null && numeric.isFinite()) number(numeric + delta) else "($raw)+(${number(delta)})"
     }
     private fun number(value: Double) = BigDecimal.valueOf(value).stripTrailingZeros().toPlainString()
+
+    private fun workingAssetPath(name: String): Path {
+        WatchDocumentStore.validateArchiveName(name)
+        val root = workDir.toRealPath()
+        val path = workDir.resolve(name).normalize()
+        var existing = path
+        while (!Files.exists(existing, LinkOption.NOFOLLOW_LINKS)) existing = existing.parent
+        if (!existing.toRealPath().startsWith(root)) throw WatchDocumentException.InvalidCommand("素材路径超出当前工作区，操作已停止：$name")
+        return path
+    }
+
+    private fun copyWorkingAsset(from: Path, name: String) {
+        val destination = workingAssetPath(name); Files.createDirectories(destination.parent)
+        val temp = Files.createTempFile(destination.parent, ".asset-", ".tmp")
+        try {
+            Files.copy(from, temp, StandardCopyOption.REPLACE_EXISTING)
+            Files.move(temp, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } finally { runCatching { Files.deleteIfExists(temp) } }
+    }
 
     private fun originalScript(): ByteArray? {
         val archive = home.resolve("original.zip")

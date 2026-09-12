@@ -847,7 +847,7 @@ object WmTagsData {
             "{dstt}" -> timeWordParts(now.second).first
             "{dsot}" -> timeWordParts(now.second).second
             "{c_elapsed}" -> String.format("%.3f", state.elapsedSeconds)
-            
+
             "{dhutc12}" -> java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).let { it.hour % 12 }.let { if (it == 0) 12 else it }.toString()
             "{dhutc12z}" -> java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).let { it.hour % 12 }.let { if (it == 0) 12 else it }.toString().padStart(2, '0')
             "{dhutc24}" -> java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).hour.toString()
@@ -1260,7 +1260,7 @@ object WmTagsData {
 
     fun evaluatePreview(expression: String, state: WmPreviewState = WmPreviewState()): String {
         if (expression.isBlank()) return ""
-        
+
         // Fast path for simple strings (like colors "ffffff" or size "100")
         // If there are no '{' tags, no math operators, and no global-script variable
         // names appear, return immediately.
@@ -1278,7 +1278,7 @@ object WmTagsData {
         }
 
         var result = expression
-        
+
         if (hasTags) {
             // Step 1: substitute known literal tags directly via Regex in one pass.
             // This replaces the extremely slow O(150) containing loop.

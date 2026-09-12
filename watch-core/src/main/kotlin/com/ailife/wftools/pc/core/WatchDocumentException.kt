@@ -24,8 +24,11 @@ internal data class DocumentSnapshot(
     val layerIds: List<String>,
     val selection: LayerSelection = LayerSelection(),
     val importedAssets: Map<String, String> = emptyMap(),
-    val scriptOverride: String? = null
+    val scriptOverride: String? = null,
+    val removedAssets: Set<String>? = null
 )
+
+internal fun DocumentSnapshot.removedAssetKeys(): Set<String> = removedAssets.orEmpty().map { it.lowercase(java.util.Locale.ROOT) }.toSet()
 
 internal data class DraftJournal(
     val version: Int = 1,
@@ -39,6 +42,23 @@ internal data class DraftJournal(
     val state: DocumentSnapshot,
     val undo: List<DocumentSnapshot>,
     val redo: List<DocumentSnapshot>,
+    val derivedResources: Map<String, String>? = null,
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+/** Version two keeps immutable snapshots outside the frequently committed index. */
+internal data class ReferencedDraftJournal(
+    val version: Int = 2,
+    val id: String,
+    val sourcePath: String?,
+    val sourceHash: String?,
+    val baseArchiveHash: String?,
+    val savedSignature: String?,
+    val revision: Long,
+    val xmlEntry: String,
+    val stateRef: String,
+    val undoRefs: List<String>,
+    val redoRefs: List<String>,
     val derivedResources: Map<String, String>? = null,
     val updatedAt: Long = System.currentTimeMillis()
 )

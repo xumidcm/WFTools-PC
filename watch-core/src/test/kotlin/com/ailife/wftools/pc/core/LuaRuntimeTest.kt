@@ -5,6 +5,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LuaRuntimeTest {
+    @Test fun numericExpressionsKeepDecimalPointUnderCommaLocale() {
+        val previous=java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.GERMANY)
+            assertEquals("14.125",WmExpressionEval.eval("14.125"))
+            assertEquals("14.125",WmExpressionEval.eval("113 / 8"))
+            val runtime=WmScriptRuntime();assertTrue(runtime.runScript("var_x=113/8"))
+            assertEquals("14.125",runtime.value("var_x"))
+        } finally { java.util.Locale.setDefault(previous) }
+    }
     @Test fun scriptStateIsIsolatedAndFormattingIsPreserved() {
         val first=WmScriptRuntime(); val second=WmScriptRuntime()
         assertTrue(first.runScript("var_count = 4; var_string = '007'; function next_count() var_count=var_count+1 end"))
