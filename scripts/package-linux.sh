@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-version="0.1.4"
+version="0.1.5"
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app_image="${1:-$repository_root/.build/linux-x64/desktopApp/compose/binaries/main/app/WFTools-PC}"
 output_directory="${2:-$repository_root/artifacts/package-$(date -u +%Y%m%d-%H%M%S)-linux-x64}"

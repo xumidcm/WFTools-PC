@@ -18,6 +18,7 @@ class LinuxDesktopPlatformTest {
         assertEquals("Linux 桌面版",desktopPlatformLabel(DesktopOperatingSystem.LINUX))
         assertEquals(listOf("gio","open",asset.parent.toString()),fileManagerRevealCommand(asset,DesktopOperatingSystem.LINUX))
         assertEquals(listOf("explorer.exe","/select,",asset.toString()),fileManagerRevealCommand(asset,DesktopOperatingSystem.WINDOWS))
+        assertEquals(listOf("xdg-open","https://example.com"),externalUrlCommand("https://example.com",DesktopOperatingSystem.LINUX))
     }
 
     @Test fun `relative XDG overrides are ignored`() {

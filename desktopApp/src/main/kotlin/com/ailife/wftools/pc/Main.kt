@@ -254,7 +254,7 @@ class CommandDispatcher(private val app: EditorApplicationModel, val doc: Docume
                     val sourceScript = app.copiedScriptContext?.takeIf { it.first == sourceId }?.second
                         ?: app.documents.firstOrNull { it.session.id == sourceId }?.view?.project?.globalScript.orEmpty()
                     val needsScript = clipboardNeedsScriptMerge(text, doc.session.id, sourceScript)
-                    doc.assetCommand("正在粘贴图层与素材…",onSuccess = { if(needsScript) doc.notice = "素材已复制；全局脚本需自行合并。" }) { pasteLayers(text) }
+                    doc.assetCommand("正在粘贴图层与素材…",onSuccess = { if(needsScript) doc.showNotice("素材已复制；全局脚本需自行合并。", NoticeAction.SCRIPT) }) { pasteLayers(text) }
                 }
                 ClipboardPayload.IMAGE -> pasteClipboardImage(clipboard.getData(DataFlavor.imageFlavor) as Image)
                 ClipboardPayload.TEXT -> pasteClipboardText(requireNotNull(text))
@@ -275,7 +275,7 @@ class CommandDispatcher(private val app: EditorApplicationModel, val doc: Docume
             Files.deleteIfExists(temporary)
             throw e
         }
-        doc.assetCommand("正在粘贴图片并创建图层…", onSuccess = { doc.notice = "已从剪贴板粘贴图片并创建图层。" }) {
+        doc.assetCommand("正在粘贴图片并创建图层…", onSuccess = { doc.showNotice("已从剪贴板粘贴图片并创建图层。") }) {
             try { importAssets(listOf(temporary), createLayers = true) }
             finally { Files.deleteIfExists(temporary) }
         }

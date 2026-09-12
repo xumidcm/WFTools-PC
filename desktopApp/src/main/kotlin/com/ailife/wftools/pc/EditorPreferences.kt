@@ -53,7 +53,7 @@ class EditorPreferences(private val directory: Path = appData().resolve("prefere
     }
     @Synchronized fun recordRecent(path: Path,title: String): List<RecentProject> {
         val identity = canonicalIdentity(path)
-        val recent = (listOf(RecentProject(path.toAbsolutePath().normalize().toString(),title,System.currentTimeMillis()))+recentProjects().filterNot { canonicalIdentity(Path.of(it.path)) == identity }).take(20)
+        val recent = (listOf(RecentProject(path.toAbsolutePath().normalize().toString(),title,System.currentTimeMillis()))+recentProjects().filterNot { it.draftId == null && canonicalIdentity(Path.of(it.path)) == identity }).take(20)
         writeRecent(recent)
         return recent
     }
@@ -66,7 +66,7 @@ class EditorPreferences(private val directory: Path = appData().resolve("prefere
     @Synchronized fun removeRecent(target: RecentProject): List<RecentProject> {
         val remaining = recentProjects().filterNot { current ->
             if (target.draftId != null) current.draftId == target.draftId
-            else canonicalIdentity(Path.of(current.path)) == canonicalIdentity(Path.of(target.path))
+            else current.draftId == null && canonicalIdentity(Path.of(current.path)) == canonicalIdentity(Path.of(target.path))
         }
         writeRecent(remaining)
         return remaining

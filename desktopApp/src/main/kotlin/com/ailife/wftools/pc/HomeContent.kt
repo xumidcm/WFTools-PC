@@ -25,12 +25,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import com.ailife.wftools.pc.platform.desktopPlatformLabel
+import com.ailife.wftools.pc.platform.openExternalUrl
 import com.ailife.wftools.pc.platform.watchFileAssociation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.awt.Desktop
-import java.net.URI
 import java.nio.file.Path
 import kotlin.math.roundToInt
 
@@ -52,7 +51,7 @@ internal fun performFileAssociationAction(
 
 @Composable fun HomeContent(app: EditorApplicationModel,onOpen: () -> Unit,onNew: () -> Unit,modifier: Modifier = Modifier,
     theme: ThemePreference = ThemePreference.SYSTEM,onTheme: (ThemePreference) -> Unit = {},
-    openExternal:(String)->Unit={url->Desktop.getDesktop().browse(URI(url))}) {
+    openExternal:(String)->Unit=::openExternalUrl) {
     var settings by remember { mutableStateOf(false) }
     var logoClicks by remember { mutableIntStateOf(0) }
     var lastLogoClick by remember { mutableLongStateOf(0L) }

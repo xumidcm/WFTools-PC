@@ -33,7 +33,7 @@ import kotlin.math.roundToInt
     val listState=rememberLazyListState();val focus=LocalFocusManager.current;val assets by rememberUpdatedState(doc.view.assets)
     LaunchedEffect(assets){selected=selected?.let{old->assets.firstOrNull{it.relative==old.relative}}}
     DisposableEffect(drops){onDispose{drops.library=null}}
-    fun importFiles() { chooseAssets(doc.window).takeIf{it.isNotEmpty()}?.let{paths->doc.importExternalAssets(paths,createLayers=false,label="正在导入素材…",onSuccess={doc.notice="已将 ${paths.size} 个素材复制到素材库。"})} }
+    fun importFiles() { chooseAssets(doc.window).takeIf{it.isNotEmpty()}?.let{paths->doc.importExternalAssets(paths,createLayers=false,label="正在导入素材…",onSuccess={doc.showNotice("已将 ${paths.size} 个素材复制到素材库。")})} }
     fun apply(asset: AssetItem) {
         val attribute=assetTargetAttribute(asset) ?: return;val ids=compatibleAssetSelection(asset,doc.view.layers,doc.view.selection.selected)
         val value=if(attribute=="font")(if(asset.kind=="fonts_bm")"bm:" else "")+asset.relative.substringAfter('/').substringBeforeLast('.') else asset.relative.substringAfter('/')

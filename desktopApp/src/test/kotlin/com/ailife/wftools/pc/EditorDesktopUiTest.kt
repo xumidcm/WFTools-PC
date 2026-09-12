@@ -212,4 +212,5 @@ class EditorDesktopUiTest {
         compose.waitUntil(5000){!editor.busy&&editor.view.layers.last().attrs["text"]=="第一行\n第二行"}
         compose.onNodeWithTag("inline-text-editor").assertDoesNotExist()
     }
+
 }

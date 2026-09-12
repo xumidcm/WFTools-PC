@@ -82,4 +82,15 @@ class EditorPreferencesTest {
         assertEquals(0,preferences.removeRecent(draft).size)
         assertTrue(preferences.recentProjects().isEmpty())
     }
+
+    @Test fun `recording a saved project ignores synthetic draft paths`() {
+        val preferences = EditorPreferences(temp.newFolder().toPath())
+        preferences.recordRecentDraft("1230d3b4-42a4-4232-972f-9c7a1f1e5455", "未保存草稿")
+
+        val saved = temp.root.toPath().resolve("saved.watch")
+        val records = preferences.recordRecent(saved, "已保存表盘")
+
+        assertEquals("已保存表盘", records.first().title)
+        assertTrue(records.any { it.draftId != null })
+    }
 }

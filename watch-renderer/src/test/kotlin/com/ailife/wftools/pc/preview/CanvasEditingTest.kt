@@ -104,6 +104,17 @@ class CanvasEditingTest {
         assertEquals(CanvasWheelAction.IGNORE,canvasWheelAction(hitId=null,selectedIds=emptySet(),ctrl=false,interactive=true,gestureActive=false))
     }
 
+    @Test fun `text transform handles update font size instead of bitmap scaling percentages`() {
+        val frame = SelectionFrame.axisAligned(listOf(Point(-50.0, -20.0), Point(50.0, 20.0)))
+        val layer = com.ailife.wftools2.domain.editor.watchmaker.WmWatchfaceLayer(
+            "text", linkedMapOf("text" to "Hello", "text_size" to "40", "anim_scale_x" to "100", "anim_scale_y" to "100")
+        )
+        val updates = textTransformAttributes(layer, HandleTransformDelta(scaleX = 1.5, scaleY = 1.5))
+        assertEquals("60", updates["text_size"])
+        assertFalse(updates.containsKey("anim_scale_x"))
+        assertFalse(updates.containsKey("anim_scale_y"))
+    }
+
     @Test fun `wheel layer scaling switch sends every wheel gesture to workspace zoom when disabled`() {
         assertEquals(CanvasWheelAction.ZOOM_WORKSPACE,canvasWheelAction(
             hitId="selected",selectedIds=setOf("selected"),ctrl=false,interactive=false,gestureActive=false,

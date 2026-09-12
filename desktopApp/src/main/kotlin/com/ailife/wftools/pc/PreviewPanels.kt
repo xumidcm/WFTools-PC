@@ -47,7 +47,7 @@ private fun cs(n:String,l:String,off:Pair<String,String>,on:Pair<String,String>)
         listOf(listOf(-86400000L to "−1天",-3600000L to "−1时",-300000L to "−5分",-60000L to "−1分"),listOf(60000L to "+1分",300000L to "+5分",3600000L to "+1时",86400000L to "+1天")).forEach { row->
             Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceEvenly){row.forEach{(delta,label)->TextButton({doc.render.timeOffsetMillis+=delta;doc.saveRenderPreferences()},contentPadding=PaddingValues(horizontal=5.dp)){Text(label,style=MaterialTheme.typography.labelSmall)}}}
         }
-        Button({doc.render.timeOffsetMillis=0;doc.render.timeSpeed=1.0;doc.saveRenderPreferences()},Modifier.fillMaxWidth()){Text("回到现在")}
+        Button({doc.render.resetTimeMachineToNow();doc.saveRenderPreferences()},Modifier.fillMaxWidth()){Text("回到现在")}
         WmSegmented(listOf("-3600" to "−3600×","-60" to "−60×","1" to "1×","60" to "60×","3600" to "3600×"),doc.render.timeSpeed.toInt().toString(),{doc.render.timeSpeed=it.toDouble();doc.saveRenderPreferences()})
         Row(verticalAlignment=Alignment.CenterVertically){Text("自动随机模拟值",Modifier.weight(1f));Switch(autoplay,{autoplay=it})}
         if(autoplay) Slider(interval,{interval=it},valueRange=.5f..10f)
@@ -88,10 +88,6 @@ private fun randomizePreview(doc:DocumentController) {
 
 @Composable private fun PreviewSimulationControls(doc:DocumentController) {
     val sections=remember { previewSections }
-    WmParamCard("实时数据") {
-        Text("桌面端目前没有手机传感器与定位数据源；以下实时开关明确保持不可用，手动模拟仍可完整编辑。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-        listOf("电量","天气","传感器","连接","设备模式","内存 / 存储").forEach { label->Row(verticalAlignment=Alignment.CenterVertically){Text("实时$label",Modifier.weight(1f));Switch(false,null,enabled=false)} }
-    }
     sections.forEach { section->WmCollapsible(section.title) { section.fields.forEach { field->SimulationField(doc,field) } } }
     WmCollapsible("加速度与陀螺仪") {
         TripleAxisControl(doc,"acceleration",listOf("加速度 X","加速度 Y","加速度 Z"),-20f..20f)
@@ -101,7 +97,7 @@ private fun randomizePreview(doc:DocumentController) {
     WmParamCard("秒表与重置") {
         Text("已用时间：${formatStopwatch(doc.render.simulation.stopwatchMs)}",style=MaterialTheme.typography.bodyMedium)
         Button({changeSimulation(doc,"stopwatchRunning","false");changeSimulation(doc,"stopwatchMs","0")},Modifier.fillMaxWidth()){Text("停止并重置秒表")}
-        OutlinedButton({doc.render.simulation=WmTagsData.WmPreviewState();doc.render.timeOffsetMillis=0;doc.render.timeSpeed=1.0;doc.render.playing=true;doc.render.isBright=true;doc.saveRenderPreferences()},Modifier.fillMaxWidth()){Text("重置全部模拟状态")}
+        OutlinedButton({doc.render.simulation=WmTagsData.WmPreviewState();doc.render.resetTimeMachineToNow();doc.render.playing=true;doc.render.isBright=true;doc.saveRenderPreferences()},Modifier.fillMaxWidth()){Text("重置全部模拟状态")}
     }
     WmCollapsible("高级模拟字段") { SimulationFields(doc,true) }
     if(doc.view.project.themeSets.isNotEmpty()) WmParamCard("表盘主题") { ThemePreviewControl(doc) }

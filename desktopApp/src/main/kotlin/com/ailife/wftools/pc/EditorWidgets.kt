@@ -26,6 +26,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 
+internal fun shouldCommitFieldEnter(multiline:Boolean, shiftPressed:Boolean):Boolean = !multiline || !shiftPressed
+
 @Composable fun CompactButton(label: String, enabled: Boolean = true, tooltip: String = label, onClick: () -> Unit) {
     TooltipArea(tooltip = { Surface(shadowElevation = 3.dp, shape = RoundedCornerShape(6.dp)) { Text(tooltip, Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall) } }) {
         TextButton(onClick, enabled = enabled, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp), shape = RoundedCornerShape(8.dp)) { Text(label, maxLines = 1) }
@@ -57,7 +59,7 @@ import androidx.compose.ui.unit.*
             onEditorFocus(state.isFocused, commit)
             if (!state.isFocused) text = value
         }.onPreviewKeyEvent { event ->
-            if (event.type == KeyEventType.KeyDown && event.key == Key.Enter && (!multiline || event.isCtrlPressed)) { if (text != value) onCommit(text); true }
+            if (event.type == KeyEventType.KeyDown && event.key == Key.Enter && shouldCommitFieldEnter(multiline,event.isShiftPressed)) { if (text != value) onCommit(text); true }
             else if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) { text = value; true } else false
         }.then(if(contentDescription!=null)Modifier.semantics(mergeDescendants=true){this.contentDescription=contentDescription}else Modifier)
         .then(if(fieldTag!=null)Modifier.testTag(fieldTag)else Modifier)

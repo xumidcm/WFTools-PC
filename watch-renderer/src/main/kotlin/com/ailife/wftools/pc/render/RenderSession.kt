@@ -169,6 +169,16 @@ class RenderSession(val directory:File, autoPlay:Boolean=true,silentMedia:Boolea
                 accentColor2=attrs["ucolor2"] ?: simulation.accentColor2,accentColor3=attrs["ucolor3"] ?: simulation.accentColor3)
         }
     }
+    fun resetTimeMachineToNow():Job = scope.launch {
+        val nowMillis=System.currentTimeMillis()
+        val now=LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(nowMillis),ZoneId.systemDefault())
+        timeOffsetMillis=0L
+        timeSpeed=1.0
+        clockMillis=nowMillis
+        lastSimulationTime=now
+        simulation=simulation.copy(now=now)
+        publish()
+    }
     fun evaluate(text:String):String=WmTagsData.evaluatePreview(text,frame)
     fun runTap(action:String) {
         scope.launch {

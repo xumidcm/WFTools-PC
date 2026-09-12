@@ -18,6 +18,8 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 
 data class AssetItem(val path: Path, val relative: String, val kind: String)
+enum class NoticeAction { SCRIPT }
+internal fun noticeActions(action: NoticeAction?): List<String> = if (action == NoticeAction.SCRIPT) listOf("查看脚本", "确定") else listOf("确定")
 data class DocumentView(
     val title: String, val source: Path?, val layers: List<EditorLayer>, val selection: LayerSelection,
     val project: WmWatchfaceProject, val revision: Long, val dirty: Boolean, val canUndo: Boolean, val canRedo: Boolean,
@@ -43,6 +45,8 @@ class DocumentController private constructor(
     val editingBlocked get() = blocking > 0 || closed
     var error by mutableStateOf<String?>(null)
     var notice by mutableStateOf<String?>(null)
+    var noticeAction by mutableStateOf<NoticeAction?>(null)
+        private set
     var externalModification by mutableStateOf(false)
     var reservedSaveIdentity by mutableStateOf<String?>(null)
         private set
@@ -137,7 +141,9 @@ class DocumentController private constructor(
         }
     }
     fun saveGlobalScriptDraft(onComplete: (Boolean)->Unit = {})=validateGlobalScriptDraft(save=true,onComplete=onComplete)
-    fun createLayerFromAsset(asset: AssetItem,x: Double = 0.0,y: Double = 0.0) = task("正在创建素材图层…",onSuccess = { notice = "已使用素材创建图层。" }) {
+    fun showNotice(message:String, action:NoticeAction?=null) { notice=message; noticeAction=action }
+    fun clearNotice() { notice=null; noticeAction=null }
+    fun createLayerFromAsset(asset: AssetItem,x: Double = 0.0,y: Double = 0.0) = task("正在创建素材图层…",onSuccess = { showNotice("已使用素材创建图层。") }) {
         val attribute = assetTargetAttribute(asset) ?: throw WatchDocumentException.InvalidCommand("此文件是配套资源，不能直接创建图层。")
         val attrs = linkedMapOf("x" to decimal(x),"y" to decimal(y),"rotation" to "0","opacity" to "100","display" to "bd","alignment" to "cc","anim_scale_x" to "100","anim_scale_y" to "100","color" to "ffffff")
         val type = when {
@@ -153,7 +159,7 @@ class DocumentController private constructor(
         fun escaped(value: String)=value.replace("&","&amp;").replace("\"","&quot;").replace("<","&lt;").replace(">","&gt;")
         session.pasteLayers("<WFToolsLayers version=\"1\"><Layer type=\"$type\" "+attrs.entries.joinToString(" "){(key,value)->"$key=\"${escaped(value)}\""}+"/></WFToolsLayers>")
     }
-    fun deleteLibraryAsset(asset: AssetItem) = assetCommand("正在删除素材…",onSuccess = { notice="素材已删除，可使用撤销恢复。" }) { deleteAsset(asset.relative) }
+    fun deleteLibraryAsset(asset: AssetItem) = assetCommand("正在删除素材…",onSuccess = { showNotice("素材已删除，可使用撤销恢复。") }) { deleteAsset(asset.relative) }
     private fun decimal(value: Double) = java.math.BigDecimal.valueOf(value).setScale(5,java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
     val preferenceIdentity get() = view.identity
     fun afterPending(action: () -> Unit) { scope.launch { while (busy) delay(10); action() } }
@@ -201,40 +207,40 @@ class DocumentController private constructor(
             store.save(session, target, derivedResources = derived)
         }
     }
-    fun exportScreenshot(target: Path) = exportCapture("正在生成截图…", "截图已导出：${target.fileName}", target) { project, state, bright, theme ->
+    fun exportScreenshot(target: Path) = exportCapture("正在生成截图…", "截图已导出：${target.fileName}", target, showProgress = false) { project, state, bright, theme ->
         PreviewCaptureExporter.capturePng(project,session.workDir.toFile(),state,bright,theme)
     }
     fun exportGif(target: Path, durationMillis: Long = PreviewCaptureExporter.DEFAULT_DURATION_MILLIS, fps: Int = PreviewCaptureExporter.DEFAULT_FPS) =
-        exportCapture("正在录制 GIF…", "GIF 已导出：${target.fileName}", target) { project, state, bright, theme ->
+        exportCapture("正在录制 GIF…", "GIF 已导出：${target.fileName}", target, showProgress = true) { project, state, bright, theme ->
             PreviewCaptureExporter.captureGif(project,session.workDir.toFile(),state,bright,theme,durationMillis,fps)
         }
     fun exportProtected(target: Path, onSuccess: () -> Unit = {}) = fileExport("正在生成受保护表盘…", "受保护表盘已导出：${target.fileName}", target, onSuccess) {
         val derived = if(session.hasUnsavedChanges) ThumbnailExporter.generate(session.toWatchProject(),session.workDir.toFile()) else emptyMap()
         store.exportProtected(session,target,derived)
     }
-    private fun exportCapture(label: String, successMessage: String, target: Path, capture: suspend (WmWatchfaceProject,WmTagsData.WmPreviewState,Boolean,Int) -> ByteArray) {
+    private fun exportCapture(label: String, successMessage: String, target: Path, showProgress: Boolean, capture: suspend (WmWatchfaceProject,WmTagsData.WmPreviewState,Boolean,Int) -> ByteArray) {
         if(closed || busy) return
         val snapshot = previewSnapshot
         val state = render.frame
         val bright = render.isBright
         val theme = render.themeIndex
-        pending++; blocking++; progressing++; status = label; error = null
+        pending++; blocking++; if(showProgress) { progressing++; status = label }; error = null
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 mutex.withLock {
                     val bytes = capture(snapshot.project,state,bright,theme)
                     withContext(Dispatchers.IO) { writeExportAtomically(target,bytes) }
                 }
-                notice = successMessage
+                showNotice(successMessage)
             } catch(e: Exception) { error = "导出失败：${e.message}" }
-            finally { pending--; blocking--; progressing--;if(progressing==0)status=null }
+            finally { pending--; blocking--; if(showProgress) { progressing--; if(progressing==0)status=null } }
         }
     }
     private fun fileExport(label: String, successMessage: String, target: Path, onSuccess: () -> Unit, block: suspend () -> Unit) {
         if(closed || busy) return
         pending++; blocking++; progressing++; status = label; error = null
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            try { mutex.withLock { withContext(Dispatchers.IO) { block() } }; notice = successMessage; onSuccess() }
+            try { mutex.withLock { withContext(Dispatchers.IO) { block() } }; showNotice(successMessage); onSuccess() }
             catch(e: Exception) { error = "导出失败：${e.message}" }
             finally { pending--; blocking--; progressing--;if(progressing==0)status=null }
         }
@@ -347,7 +353,7 @@ class EditorApplicationModel(val scope: CoroutineScope, val preferences: EditorP
                 if (source != null) preferences.recordRecent(source,doc.view.title)
                 else preferences.recordRecentDraft(doc.session.id,doc.view.title)
             }
-        } catch(e: Exception) { doc.notice = "项目已打开，但最近项目记录失败：${e.message}" }
+        } catch(e: Exception) { doc.showNotice("项目已打开，但最近项目记录失败：${e.message}") }
     } }
     fun continueSession() {
         val active = lastActivePath ?: lastSession.lastOrNull()

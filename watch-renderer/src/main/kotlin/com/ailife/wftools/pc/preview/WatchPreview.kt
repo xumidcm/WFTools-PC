@@ -131,6 +131,16 @@ private fun rotate(point: Point, center: Point, degrees: Double): Point {
     return Point(center.x + dx * cos(angle) - dy * sin(angle), center.y + dx * sin(angle) + dy * cos(angle))
 }
 
+internal fun textTransformAttributes(original: WmWatchfaceLayer, delta: HandleTransformDelta): Map<String, String> {
+    val epsilon=1e-9
+    val factor=when {
+        abs(delta.scaleX-1.0)>epsilon && abs(delta.scaleY-1.0)<=epsilon -> delta.scaleX
+        abs(delta.scaleY-1.0)>epsilon && abs(delta.scaleX-1.0)<=epsilon -> delta.scaleY
+        else -> sqrt((delta.scaleX*delta.scaleY).coerceAtLeast(.0001))
+    }
+    return if (abs(factor-1.0)>epsilon) mapOf("text_size" to multiplyEditorValue(original.getAttr("text_size", "24"),factor)) else emptyMap()
+}
+
 private fun transformUpdates(
     layers: List<Pair<String, WmWatchfaceLayer>>,
     frame: SelectionFrame,
@@ -143,8 +153,11 @@ private fun transformUpdates(
     val scaledCenter = frame.toWorld(Point(local.x * delta.scaleX, local.y * delta.scaleY))
     val desiredCenter = rotate(scaledCenter, frame.center, delta.rotationDegrees)
     val changed = linkedMapOf<String, String>()
-    if (abs(delta.scaleX - 1.0) > 1e-9) changed["anim_scale_x"] = multiplyEditorValue(original.getAttr("anim_scale_x", "100"), delta.scaleX)
-    if (abs(delta.scaleY - 1.0) > 1e-9) changed["anim_scale_y"] = multiplyEditorValue(original.getAttr("anim_scale_y", "100"), delta.scaleY)
+    if (original.layerType == "text" || original.layerType == "text_curved") changed.putAll(textTransformAttributes(original,delta))
+    else {
+        if (abs(delta.scaleX - 1.0) > 1e-9) changed["anim_scale_x"] = multiplyEditorValue(original.getAttr("anim_scale_x", "100"), delta.scaleX)
+        if (abs(delta.scaleY - 1.0) > 1e-9) changed["anim_scale_y"] = multiplyEditorValue(original.getAttr("anim_scale_y", "100"), delta.scaleY)
+    }
     if (abs(delta.rotationDegrees) > 1e-9) changed["rotation"] = addEditorDelta(original.getAttr("rotation", "0"), delta.rotationDegrees)
     val provisional = original.withUpdates(changed)
     val provisionalCenter = center(layerCorners(provisional, state, dir))

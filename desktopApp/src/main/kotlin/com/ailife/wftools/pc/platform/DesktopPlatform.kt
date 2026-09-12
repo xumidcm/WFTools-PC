@@ -4,6 +4,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.Locale
+import java.awt.Desktop
+import java.net.URI
 
 enum class DesktopOperatingSystem { WINDOWS, LINUX, MACOS, OTHER }
 
@@ -33,6 +35,19 @@ fun fileManagerRevealCommand(path:Path,os:DesktopOperatingSystem=desktopOperatin
 
 fun showInFileManager(path:Path) {
     ProcessBuilder(fileManagerRevealCommand(path)).start()
+}
+
+internal fun externalUrlCommand(url:String, os:DesktopOperatingSystem=desktopOperatingSystem()):List<String> = when(os) {
+    DesktopOperatingSystem.LINUX, DesktopOperatingSystem.OTHER -> listOf("xdg-open",url)
+    DesktopOperatingSystem.MACOS -> listOf("open",url)
+    DesktopOperatingSystem.WINDOWS -> listOf("rundll32","url.dll,FileProtocolHandler",url)
+}
+
+fun openExternalUrl(url:String) {
+    val uri=URI.create(url)
+    require(uri.scheme.equals("http",true)||uri.scheme.equals("https",true)) { "只允许打开 http/https 链接。" }
+    if (desktopOperatingSystem()==DesktopOperatingSystem.WINDOWS && Desktop.isDesktopSupported()) Desktop.getDesktop().browse(uri)
+    else ProcessBuilder(externalUrlCommand(url)).start()
 }
 
 internal fun linuxXdgDataHome(

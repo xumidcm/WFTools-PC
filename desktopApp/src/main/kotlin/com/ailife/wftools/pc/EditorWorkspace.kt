@@ -64,17 +64,17 @@ class DropRegistry {
         if (doc.busy) { doc.error = "文档正在处理其他操作，请完成后再次拖入素材。"; return }
         val geometry = preview
         if (routeExternalDrop(x, y, layerList, library, geometry?.windowBounds?.dropBounds()) == ExternalDropTarget.LayerList) {
-            doc.importExternalAssets(paths,createLayers=true,label="正在导入素材并创建图层…",onSuccess={doc.notice="素材已复制，并在图层列表中创建图层。"})
+            doc.importExternalAssets(paths,createLayers=true,label="正在导入素材并创建图层…",onSuccess={doc.showNotice("素材已复制，并在图层列表中创建图层。")})
             return
         }
         when(val target = routeAssetDrop(x, y, fields.values.toList(), library, geometry?.windowBounds?.dropBounds())) {
-            is AssetDropTarget.Property -> doc.replaceExternalAssets(target.ids,paths,target.attribute,"正在替换 ${paths.size} 个素材…",onSuccess={doc.notice="素材已替换，外部原文件保持不变。"})
-            AssetDropTarget.Library -> doc.importExternalAssets(paths,createLayers=false,label="正在导入 ${paths.size} 个素材…",onSuccess={doc.notice="已将 ${paths.size} 个素材复制到素材库。"})
+            is AssetDropTarget.Property -> doc.replaceExternalAssets(target.ids,paths,target.attribute,"正在替换 ${paths.size} 个素材…",onSuccess={doc.showNotice("素材已替换，外部原文件保持不变。")})
+            AssetDropTarget.Library -> doc.importExternalAssets(paths,createLayers=false,label="正在导入 ${paths.size} 个素材…",onSuccess={doc.showNotice("已将 ${paths.size} 个素材复制到素材库。")})
             AssetDropTarget.Preview -> {
                 val point = geometry?.toDesign(x, y)
-                doc.importExternalAssets(paths,x=point?.x?:0.0,y=point?.y?:0.0,label="正在导入 ${paths.size} 个素材并创建图层…",onSuccess={doc.notice="素材已复制并创建图层。"})
+                doc.importExternalAssets(paths,x=point?.x?:0.0,y=point?.y?:0.0,label="正在导入 ${paths.size} 个素材并创建图层…",onSuccess={doc.showNotice("素材已复制并创建图层。")})
             }
-            AssetDropTarget.Invalid -> doc.importExternalAssets(paths,createLayers=true,label="正在导入素材并创建图层…",onSuccess={doc.notice="素材已复制，并在画布中心创建图层。"})
+            AssetDropTarget.Invalid -> doc.importExternalAssets(paths,createLayers=true,label="正在导入素材并创建图层…",onSuccess={doc.showNotice("素材已复制，并在画布中心创建图层。")})
         }
     }
 }
@@ -116,7 +116,8 @@ fun Rect.dropBounds() = DropBounds(left, top, right, bottom)
             doc.notice?.let { message -> Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Info,null,Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(message,Modifier.weight(1f),style = MaterialTheme.typography.bodySmall)
-                    TextButton({ doc.requestedInspectorTab = "项目"; doc.notice = null }) { Text("查看脚本") }; TextButton({ doc.notice = null }) { Text("关闭") }
+                    if (doc.noticeAction == NoticeAction.SCRIPT) TextButton({ doc.requestedInspectorTab = "项目"; doc.clearNotice() }) { Text("查看脚本") }
+                    TextButton({ doc.clearNotice() }) { Text(if (doc.noticeAction == NoticeAction.SCRIPT) "关闭" else "确定") }
                 }
             } }
             doc.view.draftError?.let { ErrorBanner("文件已保存，但恢复草稿写入失败：$it") { } }
@@ -141,7 +142,7 @@ fun Rect.dropBounds() = DropBounds(left, top, right, bottom)
                 text = { Text("可以在新窗口打开 ${pending.path.fileName}，或只把其中的素材导入当前项目。项目属性和全局脚本不会被合并。") },
                 confirmButton = { TextButton(onClick = { drops.pendingWatch = null; app.open(listOf(pending.path)) }) { Text("新窗口打开") } },
                 dismissButton = { Row {
-                    TextButton(onClick = { drops.pendingWatch = null; doc.importExternalWatchAssets(pending.path){doc.notice="表盘素材已导入当前项目。"} }) { Text("导入到当前项目") }
+                    TextButton(onClick = { drops.pendingWatch = null; doc.importExternalWatchAssets(pending.path){doc.showNotice("表盘素材已导入当前项目。")} }) { Text("导入到当前项目") }
                     TextButton(onClick = { drops.pendingWatch = null }) { Text("取消") }
                 } },
             )

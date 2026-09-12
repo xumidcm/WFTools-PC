@@ -11,7 +11,7 @@ its uniquely named staging directory and refuses to overwrite release artifacts.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$AppImage,
-    [ValidatePattern('^\d{1,3}\.\d{1,3}\.\d{1,5}$')][string]$Version = '0.1.1',
+    [ValidatePattern('^\d{1,3}\.\d{1,3}\.\d{1,5}$')][string]$Version = '0.1.5',
     [string]$OutputDirectory = '',
     [string]$VlcDirectory = 'D:\DevTools\WFTools-PC\vlc\vlc-3.0.23',
     [string]$VlcArchive = 'D:\DevTools\WFTools-PC\downloads\vlc-3.0.23-win64.zip',
@@ -310,17 +310,31 @@ function Assert-MsiTables([string]$Path) {
     }
 }
 
+function Get-JarNoticeDirectoryName([string]$BaseName) {
+    # WiX 3 resolves File/@Source through the Win32 path API. Some Compose
+    # JAR names plus META-INF notice paths exceed MAX_PATH when kept verbatim.
+    # Keep a readable prefix and append a stable suffix so the package remains
+    # deterministic while staying below the legacy linker limit.
+    if ($BaseName.Length -le 40) { return $BaseName }
+    $bytes = [Text.Encoding]::UTF8.GetBytes($BaseName.ToLowerInvariant())
+    $stream = [IO.MemoryStream]::new($bytes, $false)
+    try { $suffix = (Get-StreamHash $stream).Substring(0, 8).ToLowerInvariant() }
+    finally { $stream.Dispose() }
+    return $BaseName.Substring(0, 31) + '-' + $suffix
+}
+
 function Export-JarNotices([string]$Payload) {
     $results = [Collections.Generic.List[object]]::new()
     $root = Join-Path $Payload 'licenses/jars'
     foreach ($jar in Get-ChildItem -LiteralPath (Join-Path $Payload 'app') -Filter '*.jar' -File -Recurse) {
         $archive = [IO.Compression.ZipFile]::OpenRead($jar.FullName)
         $extracted = [Collections.Generic.List[string]]::new()
+        $noticeDirectory = Get-JarNoticeDirectoryName $jar.BaseName
         try {
             foreach ($entry in $archive.Entries) {
                 if ($entry.FullName -notmatch '(^|/)(LICENSE|LICENCE|COPYING|NOTICE)([._-][^/]*)?$|^META-INF/maven/.+/pom\.xml$') { continue }
                 if ($entry.FullName -match '(^|/)\.\.(/|$)|[\\:]' -or $entry.Length -gt 10MB) { throw "Unsafe or oversized JAR notice: $($jar.Name)/$($entry.FullName)" }
-                $destination = Join-Path (Join-Path $root $jar.BaseName) $entry.FullName
+                $destination = Join-Path (Join-Path $root $noticeDirectory) $entry.FullName
                 Assert-UnderDirectory $destination $root
                 [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination))
                 $inputStream = $entry.Open(); $outputStream = [IO.File]::Create($destination)
@@ -328,7 +342,7 @@ function Export-JarNotices([string]$Payload) {
                 $extracted.Add($entry.FullName)
             }
         } finally { $archive.Dispose() }
-        $results.Add([pscustomobject]@{ Jar = $jar.Name; Sha256 = (Get-FileHash -LiteralPath $jar.FullName -Algorithm SHA256).Hash; Notices = $extracted.ToArray() })
+        $results.Add([pscustomobject]@{ Jar = $jar.Name; NoticeDirectory = $noticeDirectory; Sha256 = (Get-FileHash -LiteralPath $jar.FullName -Algorithm SHA256).Hash; Notices = $extracted.ToArray() })
     }
     return $results.ToArray()
 }
