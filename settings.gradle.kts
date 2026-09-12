@@ -19,5 +19,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "WFTools"
-include(":app")
+rootProject.name = "WFTools-PC"
+// The upstream Android application remains available as a migration reference.
+include(":watch-core", ":watch-renderer", ":desktopApp")

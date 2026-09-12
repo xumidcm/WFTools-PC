@@ -1,5 +1,22 @@
 # AGENTS.md - WFTools Developer Guide
 
+## Windows migration (active project)
+
+The approved Windows plan supersedes Android-only guidance below for `watch-core`,
+`watch-renderer`, and `desktopApp`. These are JVM modules; use Path/File, Compose
+Desktop and platform services, never Android Context/Uri. The Android `app` module
+is retained only as reference and is not part of the default build.
+
+- Work in `D:\WFTools-PC\wftools` on `codex/windows-watch`.
+- Build on native Windows using PowerShell and `./gradlew.bat`.
+- Device preview and workspace view state must never modify watch XML or export dimensions.
+- Preserve unknown XML and archive resources; save atomically and detect external modification.
+- The original `D:\Administrator\Downloads\312.watch` is read-only; test copies only, never commit it.
+- Only stage explicitly reviewed paths. No Flue workspace edits.
+- Product/style contracts are in PRODUCT.md and DESIGN.md; progress in docs/windows/IMPLEMENTATION.md.
+- New desktop business logic requires meaningful regression tests. Do not run concurrent Gradle builds.
+
+
 This file provides guidance for agentic coding agents working on the WFTools Android project.
 
 ## Project Overview

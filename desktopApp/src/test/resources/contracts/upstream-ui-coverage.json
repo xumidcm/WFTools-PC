@@ -1,0 +1,490 @@
+[
+  {
+    "component": "WmMarkersParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "markers"
+    ],
+    "keys": [
+      "color",
+      "m_count",
+      "m_height",
+      "m_width",
+      "radius",
+      "shape",
+      "squarify"
+    ],
+    "entryTag": "known-section-WmMarkersParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmMarkersHmParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "markers_hm"
+    ],
+    "keys": [
+      "color",
+      "color2",
+      "m_hour",
+      "m_minute",
+      "radius",
+      "squarify"
+    ],
+    "entryTag": "known-section-WmMarkersHmParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmTextRingParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "text_ring"
+    ],
+    "keys": [
+      "angle_end",
+      "angle_start",
+      "color",
+      "font",
+      "hide_text",
+      "radius",
+      "ring_type",
+      "rotated_text",
+      "show_every",
+      "squarify",
+      "text_size",
+      "transform"
+    ],
+    "entryTag": "known-section-WmTextRingParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmSeriesParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "series"
+    ],
+    "keys": [
+      "color",
+      "color2",
+      "current_pos",
+      "font",
+      "font2",
+      "orientation",
+      "series",
+      "spacing",
+      "text_size",
+      "text_size2",
+      "transform"
+    ],
+    "entryTag": "known-section-WmSeriesParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmCalendarParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "calendar"
+    ],
+    "keys": [
+      "color",
+      "color2",
+      "dow_start",
+      "font",
+      "font2",
+      "margin_x",
+      "margin_y",
+      "no_letters_header",
+      "outside_opacity",
+      "text_size",
+      "transform"
+    ],
+    "entryTag": "known-section-WmCalendarParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmChartParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "chart"
+    ],
+    "keys": [
+      "bar_thickness",
+      "bottom_opacity",
+      "chart_group",
+      "chart_type",
+      "color",
+      "color2",
+      "color3",
+      "color4",
+      "corner_type",
+      "data_points",
+      "labels",
+      "line_width",
+      "lines",
+      "marker_size",
+      "min_max",
+      "radius",
+      "tension",
+      "top_opacity"
+    ],
+    "entryTag": "known-section-WmChartParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmVideoParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "video"
+    ],
+    "keys": [
+      "color",
+      "path"
+    ],
+    "entryTag": "known-section-WmVideoParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmMapParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "map"
+    ],
+    "keys": [
+      "lat",
+      "lon",
+      "map_scale",
+      "map_zoom"
+    ],
+    "entryTag": "known-section-WmMapParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmGallery2dParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "gallery_2d"
+    ],
+    "keys": [
+      "dur_on"
+    ],
+    "entryTag": "known-section-WmGallery2dParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmImageParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmImageParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "image"
+    ],
+    "keys": [
+      "color",
+      "path"
+    ],
+    "entryTag": "known-section-WmImageParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmImageGifParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmImageParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "image_gif"
+    ],
+    "keys": [
+      "gif_delay",
+      "path"
+    ],
+    "entryTag": "known-section-WmImageGifParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmImageCondParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmImageParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "image_cond"
+    ],
+    "keys": [
+      "color",
+      "cond_grid",
+      "cond_value",
+      "path",
+      "weather_night"
+    ],
+    "entryTag": "known-section-WmImageCondParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmShapeParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "shape",
+      "rounded"
+    ],
+    "keys": [
+      "color",
+      "corner_type",
+      "outline",
+      "radius",
+      "shape"
+    ],
+    "entryTag": "known-section-WmShapeParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmProgressParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "progress"
+    ],
+    "keys": [
+      "angle",
+      "color",
+      "color2",
+      "color3",
+      "color4",
+      "corner_type",
+      "end_style",
+      "margin",
+      "outside_opacity",
+      "pct_complete",
+      "radius"
+    ],
+    "entryTag": "known-section-WmProgressParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmRingParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "ring"
+    ],
+    "keys": [
+      "angle",
+      "angle_total",
+      "color",
+      "color2",
+      "color3",
+      "is_clockwise",
+      "outside_opacity",
+      "radius",
+      "radius_inner",
+      "radius_outer"
+    ],
+    "entryTag": "known-section-WmRingParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmOutlineParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "text",
+      "text_curved",
+      "shape",
+      "rounded"
+    ],
+    "keys": [
+      "o_color",
+      "o_opacity",
+      "o_size",
+      "outline"
+    ],
+    "entryTag": "known-section-WmOutlineParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmShaderParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "image",
+      "image_gif",
+      "image_cond",
+      "text",
+      "text_curved",
+      "shape",
+      "rounded",
+      "video"
+    ],
+    "keys": [
+      "shader",
+      "u_1",
+      "u_2",
+      "u_3",
+      "u_4",
+      "u_5"
+    ],
+    "entryTag": "known-section-WmShaderParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmTextParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmTextParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "text",
+      "text_curved"
+    ],
+    "keys": [
+      "color",
+      "color_dim",
+      "font",
+      "outline",
+      "stencil",
+      "text",
+      "text_size",
+      "transform"
+    ],
+    "entryTag": "known-section-WmTextParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmTextCurvedParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmTextParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "text_curved"
+    ],
+    "keys": [
+      "curve_dir",
+      "radius"
+    ],
+    "entryTag": "known-section-WmTextCurvedParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmTextShadowParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmTextParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "text",
+      "text_curved",
+      "shape",
+      "rounded"
+    ],
+    "keys": [
+      "shadow",
+      "w_angle",
+      "w_color",
+      "w_distance",
+      "w_opacity"
+    ],
+    "entryTag": "known-section-WmTextShadowParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "WmTextAnimParams",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmTextParams.kt",
+    "scope": "layer",
+    "bindings": [
+      "text",
+      "text_curved"
+    ],
+    "keys": [
+      "anim_in",
+      "anim_out",
+      "delay_start",
+      "dur_in",
+      "dur_off",
+      "dur_on",
+      "dur_out",
+      "repeat_count",
+      "restart_on_bright",
+      "restart_on_load",
+      "restart_text_change"
+    ],
+    "entryTag": "known-section-WmTextAnimParams",
+    "fieldPrefix": "known-layer-field-",
+    "notes": "Known controls must be reachable in dedicated sections, never only advanced raw attributes."
+  },
+  {
+    "component": "ProjectRootFields",
+    "source": "app/src/main/java/com/ailife/wftools2/domain/editor/watchmaker/WmFormatAdapter.kt:GlobalSection",
+    "scope": "project",
+    "bindings": [
+      "project"
+    ],
+    "keys": [
+      "name",
+      "description",
+      "tags",
+      "author",
+      "web_link",
+      "shape",
+      "bg_color"
+    ],
+    "entryTag": "known-project-basic",
+    "fieldPrefix": "known-project-field-",
+    "notes": "GlobalTab and GlobalSection confirmed fields; dedicated controls required."
+  },
+  {
+    "component": "audio-resources",
+    "source": "app/src/main/java/com/ailife/wftools2/domain/editor/watchmaker/WmFormatAdapter.kt:GlobalSection/AudioResourcesDialog",
+    "scope": "project-section",
+    "bindings": [
+      "project"
+    ],
+    "keys": [],
+    "entryTag": "project-section-audio-resources",
+    "fieldPrefix": "",
+    "notes": "The mobile watch-face tab exposes audio resources as a first-class editor."
+  },
+  {
+    "component": "watch-save-actions",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/GlobalTab.kt:106-119",
+    "scope": "project-section",
+    "bindings": [
+      "project"
+    ],
+    "keys": [],
+    "entryTag": "project-section-save-actions",
+    "fieldPrefix": "",
+    "notes": "Save As and protected Save As remain reachable from the desktop project page."
+  },
+  {
+    "component": "watch-capture-actions",
+    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/GlobalTab.kt:121-135",
+    "scope": "project-section",
+    "bindings": [
+      "project"
+    ],
+    "keys": [],
+    "entryTag": "project-section-capture-actions",
+    "fieldPrefix": "",
+    "notes": "Screenshot and GIF recording remain reachable from the desktop project page."
+  }
+]
