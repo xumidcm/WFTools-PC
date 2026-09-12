@@ -170,13 +170,13 @@ class EditorDesktopUiTest {
         compose.onNodeWithTag("workspace-settings-entry").performClick()
         compose.onNodeWithTag("automatic-snapping-toggle").performClick()
         compose.runOnIdle {
-            assertFalse(editor.preview.snapping); assertFalse(editor.view.dirty)
+            assertFalse(app.canvasInput.snapping); assertTrue(editor.preview.snapping); assertFalse(editor.view.dirty)
             assertEquals(before.revision,editor.view.revision); assertEquals(before.selection,editor.view.selection)
             assertEquals(before.canUndo,editor.view.canUndo); assertEquals(before.canRedo,editor.view.canRedo)
             assertFalse("Snapping is independent from action testing",editor.render.interactionMode)
         }
         compose.onNodeWithTag("automatic-snapping-toggle").performClick()
-        compose.runOnIdle { assertTrue(editor.preview.snapping); assertEquals(before.project,editor.view.project) }
+        compose.runOnIdle { assertTrue(app.canvasInput.snapping); assertEquals(before.project,editor.view.project) }
         assertArrayEquals(archive,java.nio.file.Files.readAllBytes(before.source))
     }
     @Test fun `project ordinary save as delegates through the same installed application hook`() {

@@ -31,8 +31,8 @@ private fun cs(n:String,l:String,off:Pair<String,String>,on:Pair<String,String>)
         DevicePreviewControls(doc)
         PreviewSimulationControls(doc)
         WmParamCard("画布交互") {
-            Text("操作方式、自动吸附和变换控制点都可在右上角“更多操作 → 画布设置”中调整。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(if(doc.preview.showTransformHandles)"当前使用 Flue 样式：显示八向缩放点和旋转拉杆。" else "当前使用 WFTools 原始样式：简洁选框，只选择和移动。",style=MaterialTheme.typography.bodySmall)
+            Text("操作方式可在右上角“更多操作 → 画布设置”中调整；自动吸附、变换控制点和操作状态提示也可在首页“设置”中调整。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("变换控制点开启时显示八向缩放点和旋转拉杆；关闭后使用简洁选框。",style=MaterialTheme.typography.bodySmall)
         }
     }
 }

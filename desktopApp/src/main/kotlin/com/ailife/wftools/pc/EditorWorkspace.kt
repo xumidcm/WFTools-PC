@@ -88,24 +88,24 @@ fun Rect.dropBounds() = DropBounds(left, top, right, bottom)
         val availableHeight = maxHeight.value
         val layout = editorLayout(availableWidth)
         Column(Modifier.fillMaxSize()) {
-            Toolbar(doc, commands,theme,onTheme)
+            Toolbar(doc,commands,theme,onTheme,app.canvasInput){app.canvasInput=it}
             HorizontalDivider()
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when(layout) {
                     EditorLayout.THREE_COLUMNS -> Row(Modifier.fillMaxSize()) {
                         LibraryPanel(doc, commands, drops, Modifier.width(panels.left.dp).fillMaxHeight())
                         Splitter(false,"left-panel-splitter") { onPanels(panels.copy(left = (panels.left + it).coerceIn(180f, 520f))) }
-                        PreviewPanel(doc, commands, drops, Modifier.weight(1f).fillMaxHeight())
+                        PreviewPanel(doc,commands,drops,app.canvasInput,Modifier.weight(1f).fillMaxHeight())
                         Splitter(false,"right-panel-splitter") { onPanels(panels.copy(right = (panels.right - it).coerceIn(240f, 560f))) }
                         InspectorPanel(doc, drops, false, commands, Modifier.width(panels.right.dp).fillMaxHeight(), wideEditor = true)
                     }
                     EditorLayout.SIDE_INSPECTOR -> Row(Modifier.fillMaxSize()) {
-                        PreviewPanel(doc, commands, drops, Modifier.weight(1f).fillMaxHeight())
+                        PreviewPanel(doc,commands,drops,app.canvasInput,Modifier.weight(1f).fillMaxHeight())
                         Splitter(false,"right-panel-splitter") { onPanels(panels.copy(right = (panels.right - it).coerceIn(260f, 560f))) }
                         InspectorPanel(doc, drops, true, commands, Modifier.width(panels.right.coerceIn(260f, 560f).dp).fillMaxHeight(), wideEditor = true)
                     }
                     EditorLayout.STACKED -> Column(Modifier.fillMaxSize()) {
-                        PreviewPanel(doc, commands, drops, Modifier.weight(1f).fillMaxWidth())
+                        PreviewPanel(doc,commands,drops,app.canvasInput,Modifier.weight(1f).fillMaxWidth())
                         Splitter(true,"bottom-panel-splitter") { onPanels(panels.copy(bottom = (panels.bottom - it).coerceIn(160f, (availableHeight - 280f).coerceAtLeast(160f)))) }
                         InspectorPanel(doc, drops, true, commands, Modifier.fillMaxWidth().height(panels.bottom.coerceIn(160f, (availableHeight - 280f).coerceAtLeast(160f)).dp), wideEditor = false)
                     }
@@ -121,13 +121,13 @@ fun Rect.dropBounds() = DropBounds(left, top, right, bottom)
             doc.view.draftError?.let { ErrorBanner("文件已保存，但恢复草稿写入失败：$it") { } }
             HorizontalDivider()
             Row(Modifier.fillMaxWidth().height(26.dp).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(if (doc.preview.showOperationStatus) doc.status ?: "${doc.view.layers.size} 个图层 · 已选 ${doc.view.selection.selected.size}" else "${doc.view.layers.size} 个图层 · 已选 ${doc.view.selection.selected.size}", style = MaterialTheme.typography.bodySmall)
+                Text(if (app.canvasInput.showOperationStatus) doc.status ?: "${doc.view.layers.size} 个图层 · 已选 ${doc.view.selection.selected.size}" else "${doc.view.layers.size} 个图层 · 已选 ${doc.view.selection.selected.size}", style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.weight(1f))
                 Text(doc.view.source?.fileName?.toString() ?: "尚未保存", style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.width(12.dp)); Text(if(doc.hasUnsavedChanges) "有未保存修改" else "已保存", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (doc.showProgress && doc.preview.showOperationStatus) Surface(Modifier.align(Alignment.BottomCenter).padding(12.dp).widthIn(max = 420.dp), shape = RoundedCornerShape(10.dp), tonalElevation = 4.dp) {
+        if (doc.showProgress && app.canvasInput.showOperationStatus) Surface(Modifier.align(Alignment.BottomCenter).padding(12.dp).widthIn(max = 420.dp), shape = RoundedCornerShape(10.dp), tonalElevation = 4.dp) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
                 Text(doc.status ?: "正在处理…", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -147,7 +147,7 @@ fun Rect.dropBounds() = DropBounds(left, top, right, bottom)
         }
     }
 }
-@Composable private fun Toolbar(doc: DocumentController, commands: CommandDispatcher,theme: ThemePreference,onTheme: (ThemePreference)->Unit) {
+@Composable private fun Toolbar(doc: DocumentController,commands: CommandDispatcher,theme: ThemePreference,onTheme: (ThemePreference)->Unit,canvasInput:CanvasInputPreferences,onCanvasInput:(CanvasInputPreferences)->Unit) {
     var more by remember { mutableStateOf(false) }
     var fileMenu by remember { mutableStateOf(false) }
     Surface(tonalElevation = 4.dp,shadowElevation = 2.dp,color = MaterialTheme.colorScheme.surface) {
@@ -173,7 +173,7 @@ fun Rect.dropBounds() = DropBounds(left, top, right, bottom)
          }
         Box {
             WmIconButton(Icons.Default.MoreVert,"更多操作") { more = true }
-            EditorOverflow(more,{ more = false },doc,commands,theme,onTheme)
+            EditorOverflow(more,{ more = false },doc,commands,theme,onTheme,canvasInput,onCanvasInput)
         }
      }
     }
@@ -239,7 +239,7 @@ val layerTypes = listOf("image" to "图片", "image_gif" to "GIF 动画", "video
 @Composable private fun LayersPanel(doc: DocumentController, commands: CommandDispatcher, modifier: Modifier, drops: DropRegistry? = null) = LayerBrowser(doc,commands,modifier,drops = drops)
 @Composable private fun AssetsPanel(doc: DocumentController, drops: DropRegistry, modifier: Modifier) = AssetBrowser(doc,drops,modifier)
 private val layerContextCommands = listOf(EditorCommand.COPY, EditorCommand.PASTE, EditorCommand.DUPLICATE, EditorCommand.DELETE, EditorCommand.HIDE, EditorCommand.SHOW, EditorCommand.UP, EditorCommand.DOWN, EditorCommand.TOP, EditorCommand.BOTTOM)
-@Composable private fun PreviewPanel(doc: DocumentController, commands: CommandDispatcher, drops: DropRegistry, modifier: Modifier) {
+@Composable private fun PreviewPanel(doc:DocumentController,commands:CommandDispatcher,drops:DropRegistry,canvasInput:CanvasInputPreferences,modifier:Modifier) {
     var more by remember { mutableStateOf(false) }
     var zoomMenu by remember { mutableStateOf(false) }
     var inlineTextEdit by remember { mutableStateOf<InlineTextEditRequest?>(null) }
@@ -275,13 +275,16 @@ private val layerContextCommands = listOf(EditorCommand.COPY, EditorCommand.PAST
             }
         }
         }
-        Box(Modifier.weight(1f).fillMaxWidth().border(1.dp,MaterialTheme.colorScheme.outlineVariant).onPointerEvent(PointerEventType.Press) { event -> if(event.buttons.isSecondaryPressed)contextMenu=event.changes.firstOrNull()?.position }) {
+        Box(Modifier.weight(1f).fillMaxWidth().border(1.dp,MaterialTheme.colorScheme.outlineVariant)) {
           Box(Modifier.fillMaxSize().onFocusChanged { if(it.hasFocus) doc.focus = EditorFocus.CANVAS }) {
             val view = doc.view
             WatchPreview(doc.session, view.revision, doc.render, effectivePreviewDevice(doc.preview), doc.preview.workspace,
                 onWorkspaceChange = { doc.preview = doc.preview.copy(workspace = it) }, onDocumentChange = doc::refreshFromPreview,
-                modifier = Modifier.fillMaxSize().testTag("watch-preview"), snapping = doc.preview.snapping, operationMode = doc.preview.operationMode, showTransformHandles = doc.preview.showTransformHandles, onLayerAttributesCommit = doc::commitLayerAttributes, onDropGeometry = { drops.preview = it },
-                snapshot = doc.previewSnapshot, committedLayerAttributes = view.layers.associate { it.id to it.attrs }, onDocumentCommand = { command -> if(!doc.editingBlocked) doc.command(block = command) }, onTextEdit = { id,position -> inlineTextEdit = InlineTextEditRequest(id,position) })
+                modifier = Modifier.fillMaxSize().testTag("watch-preview"),snapping=canvasInput.snapping,operationMode=doc.preview.operationMode,showTransformHandles=canvasInput.showTransformHandles,
+                middleButtonPanEnabled=canvasInput.middleButtonPan,rightButtonPanEnabled=canvasInput.rightButtonPan,wheelScalesSelectedLayer=canvasInput.wheelScalesSelectedLayer,
+                onLayerAttributesCommit = doc::commitLayerAttributes, onDropGeometry = { drops.preview = it },
+                snapshot = doc.previewSnapshot, committedLayerAttributes = view.layers.associate { it.id to it.attrs }, onDocumentCommand = { command -> if(!doc.editingBlocked) doc.command(block = command) },
+                onTextEdit = { id,position -> inlineTextEdit = InlineTextEditRequest(id,position) },onContextMenu={contextMenu=it})
             inlineTextEdit?.let { request ->
                 val id=request.id
                 val layer = doc.view.layers.firstOrNull { it.id == id }

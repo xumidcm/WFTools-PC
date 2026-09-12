@@ -106,7 +106,7 @@ internal fun performFileAssociationAction(
             }
         }
     }
-    if(settings) HomeSettingsDialog(theme,onTheme,onDismiss={settings=false})
+    if(settings) HomeSettingsDialog(theme,onTheme,app.canvasInput,{app.canvasInput=it},onDismiss={settings=false})
 }
 
 @Composable private fun RecentProjectRow(app:EditorApplicationModel,recent:RecentProject) {
@@ -132,7 +132,7 @@ internal fun performFileAssociationAction(
     if(deleteConfirm) AlertDialog(onDismissRequest={deleteConfirm=false},title={Text("删除表盘？")},text={Text(if(recent.draftId!=null)"这会删除未保存草稿，且无法从最近编辑恢复。" else "这会直接删除原始 .watch 文件，操作不可撤销：\n${recent.path}")},confirmButton={TextButton(onClick={deleteConfirm=false;app.deleteRecentWatch(recent)}){Text("删除")}},dismissButton={TextButton(onClick={deleteConfirm=false}){Text("取消")}})
 }
 
-@Composable private fun HomeSettingsDialog(currentTheme:ThemePreference,onTheme:(ThemePreference)->Unit,onDismiss:()->Unit) {
+@Composable private fun HomeSettingsDialog(currentTheme:ThemePreference,onTheme:(ThemePreference)->Unit,canvasInput:CanvasInputPreferences,onCanvasInput:(CanvasInputPreferences)->Unit,onDismiss:()->Unit) {
     val theme = when(currentTheme){ThemePreference.SYSTEM->"跟随系统";ThemePreference.LIGHT->"浅色";ThemePreference.DARK->"深色"}
     val association=remember{WindowsWatchFileAssociation()}
     val scope=rememberCoroutineScope()
@@ -141,9 +141,18 @@ internal fun performFileAssociationAction(
     var associationBusy by remember{mutableStateOf(false)}
     var associationError by remember{mutableStateOf<String?>(null)}
     LaunchedEffect(association){associated=withContext(Dispatchers.IO){runCatching{association.isAssociated()}.getOrDefault(false)};associationLoaded=true}
-    AlertDialog(onDismissRequest=onDismiss,title={Text("设置")},text={Column(Modifier.widthIn(min=420.dp,max=620.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+    AlertDialog(onDismissRequest=onDismiss,title={Text("设置")},text={Column(Modifier.widthIn(min=420.dp,max=620.dp).heightIn(max=560.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(14.dp)) {
         Text("外观",style=MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement=Arrangement.spacedBy(6.dp)){listOf("跟随系统","浅色","深色").forEach{value->FilterChip(selected=theme==value,onClick={onTheme(when(value){"浅色"->ThemePreference.LIGHT;"深色"->ThemePreference.DARK;else->ThemePreference.SYSTEM})},label={Text(value)})}}
+        HorizontalDivider()
+        Text("画布操作",style=MaterialTheme.typography.titleSmall)
+        HomeCanvasInputSwitch("中键拖动画布",canvasInput.middleButtonPan,"home-middle-button-pan-toggle"){onCanvasInput(canvasInput.copy(middleButtonPan=it))}
+        HomeCanvasInputSwitch("右键拖动画布",canvasInput.rightButtonPan,"home-right-button-pan-toggle"){onCanvasInput(canvasInput.copy(rightButtonPan=it))}
+        HomeCanvasInputSwitch("滚轮缩放选中元素",canvasInput.wheelScalesSelectedLayer,"home-wheel-layer-scale-toggle"){onCanvasInput(canvasInput.copy(wheelScalesSelectedLayer=it))}
+        HomeCanvasInputSwitch("自动吸附",canvasInput.snapping,"home-automatic-snapping-toggle"){onCanvasInput(canvasInput.copy(snapping=it))}
+        HomeCanvasInputSwitch("变换控制点",canvasInput.showTransformHandles,"home-transform-handles-toggle"){onCanvasInput(canvasInput.copy(showTransformHandles=it))}
+        HomeCanvasInputSwitch("显示操作状态提示",canvasInput.showOperationStatus,"home-operation-status-toggle"){onCanvasInput(canvasInput.copy(showOperationStatus=it))}
+        Text("鼠标直拖模式：按住图层即可移动，拖动未选中的图层会切换目标。\n先选后拖模式没有选择元素时，左键拖动表盘。选择元素后，可从画布任意位置拖动选区。\n中键或右键拖动：对应开关开启时平移整个表盘。\n滚轮：开关开启时可缩放光标下的选中元素；关闭后始终缩放整个表盘。\n自动吸附会在移动和变换时对齐画布及其他元素；变换控制点可显示八向缩放点和旋转拉杆；操作状态提示只用于显示耗时任务进度。\n空格 + 左键或 Ctrl + 左键：临时拖动画布；Ctrl + 滚轮：始终缩放整个表盘。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider()
         Text("文件格式关联",style=MaterialTheme.typography.titleSmall)
         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
@@ -160,4 +169,11 @@ internal fun performFileAssociationAction(
         }
         associationError?.let{Text(it,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)}
     }},confirmButton={Button(onClick=onDismiss){Text("完成")}},dismissButton={TextButton(onClick=onDismiss){Text("取消")}})
+}
+
+@Composable private fun HomeCanvasInputSwitch(label:String,checked:Boolean,tag:String,onChecked:(Boolean)->Unit) {
+    Row(Modifier.fillMaxWidth().testTag(tag).clickable{onChecked(!checked)}.padding(vertical=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+        Text(label,Modifier.weight(1f))
+        Switch(checked,onCheckedChange=null)
+    }
 }

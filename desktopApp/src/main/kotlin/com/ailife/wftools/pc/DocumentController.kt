@@ -322,6 +322,7 @@ class DocumentController private constructor(
 
 class EditorApplicationModel(val scope: CoroutineScope, val preferences: EditorPreferences = EditorPreferences(), val store: WatchDocumentStore = WatchDocumentStore()) {
     val documents = mutableStateListOf<DocumentController>()
+    var canvasInput by mutableStateOf(preferences.canvasInput())
     var recovery by mutableStateOf<List<RecoveryDraft>>(emptyList())
     var launcher by mutableStateOf(true)
     var launcherWindow: Window? = null

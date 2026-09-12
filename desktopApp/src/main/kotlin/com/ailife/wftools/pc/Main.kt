@@ -50,9 +50,9 @@ fun main(args: Array<String>) {
         var theme by remember { mutableStateOf(initialTheme) }
         var panels by remember { mutableStateOf(initialPanels) }
         var windowPreference by remember { mutableStateOf(initialWindow) }
-        LaunchedEffect(theme, panels, windowPreference) {
+        LaunchedEffect(theme, panels, windowPreference, app.canvasInput) {
             delay(450)
-            withContext(Dispatchers.IO) { runCatching { preferences.saveApplication(theme, panels, windowPreference) } }
+            withContext(Dispatchers.IO) { runCatching { preferences.saveApplication(theme, panels, windowPreference, app.canvasInput) } }
         }
         LaunchedEffect(broker) { app.refreshRecovery(); for (request in broker.requests) app.open(request) }
         val dark = when(theme) { ThemePreference.SYSTEM -> isSystemInDarkTheme(); ThemePreference.LIGHT -> false; ThemePreference.DARK -> true }

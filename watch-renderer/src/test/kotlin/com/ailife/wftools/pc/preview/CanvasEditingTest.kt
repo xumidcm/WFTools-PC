@@ -104,6 +104,17 @@ class CanvasEditingTest {
         assertEquals(CanvasWheelAction.IGNORE,canvasWheelAction(hitId=null,selectedIds=emptySet(),ctrl=false,interactive=true,gestureActive=false))
     }
 
+    @Test fun `wheel layer scaling switch sends every wheel gesture to workspace zoom when disabled`() {
+        assertEquals(CanvasWheelAction.ZOOM_WORKSPACE,canvasWheelAction(
+            hitId="selected",selectedIds=setOf("selected"),ctrl=false,interactive=false,gestureActive=false,
+            scaleSelectedLayer=false,
+        ))
+        assertEquals(CanvasWheelAction.SCALE_SELECTED_LAYER,canvasWheelAction(
+            hitId="selected",selectedIds=setOf("selected"),ctrl=false,interactive=false,gestureActive=false,
+            scaleSelectedLayer=true,
+        ))
+    }
+
     @Test fun `wheel zoom changes the whole workspace around its center`() {
         val state = centeredWorkspaceZoom(WorkspaceViewState(true,1.0,18.0,-9.0), currentScale = 1.0, scrollDelta = -1.0)
         assertFalse(state.fit)
@@ -125,5 +136,21 @@ class CanvasEditingTest {
         assertEquals(Cursor.W_RESIZE_CURSOR,transformHandleCursor(TransformHandle.LEFT))
         assertEquals(Cursor.E_RESIZE_CURSOR,transformHandleCursor(TransformHandle.RIGHT))
         assertEquals(Cursor.CROSSHAIR_CURSOR,transformHandleCursor(TransformHandle.ROTATE))
+    }
+
+
+    @Test fun `canvas drag panning honours independent middle and right switches`() {
+        assertTrue(canvasDragPans(CanvasDragButton.TERTIARY,CanvasOperationMode.DIRECT_DRAG,setOf("layer"),middleButtonPanEnabled=true,rightButtonPanEnabled=false))
+        assertFalse(canvasDragPans(CanvasDragButton.TERTIARY,CanvasOperationMode.DIRECT_DRAG,setOf("layer"),middleButtonPanEnabled=false,rightButtonPanEnabled=true))
+        assertTrue(canvasDragPans(CanvasDragButton.SECONDARY,CanvasOperationMode.DIRECT_DRAG,setOf("layer"),middleButtonPanEnabled=false,rightButtonPanEnabled=true))
+        assertFalse(canvasDragPans(CanvasDragButton.SECONDARY,CanvasOperationMode.DIRECT_DRAG,setOf("layer"),middleButtonPanEnabled=true,rightButtonPanEnabled=false))
+    }
+
+    @Test fun `select then drag uses empty selection as a primary workspace pan gesture`() {
+        assertTrue(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.SELECT_THEN_DRAG,emptySet()))
+        assertFalse(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.SELECT_THEN_DRAG,setOf("layer")))
+        assertFalse(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.DIRECT_DRAG,emptySet()))
+        assertTrue(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.DIRECT_DRAG,setOf("layer"),spaceDown=true))
+        assertTrue(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.DIRECT_DRAG,setOf("layer"),ctrlPrimary=true))
     }
 }

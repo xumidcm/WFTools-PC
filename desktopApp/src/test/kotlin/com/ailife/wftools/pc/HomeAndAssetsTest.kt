@@ -108,6 +108,22 @@ class HomeAndAssetsTest {
         compose.onNodeWithText("在 Windows 设置中管理文件关联").assertDoesNotExist()
     }
 
+    @Test fun `home settings explains canvas controls and edits the shared input switches`() {
+        val preferences=EditorPreferences(temp.newFolder("canvas-settings-prefs").toPath())
+        val model=EditorApplicationModel(scope,preferences,WatchDocumentStore(temp.newFolder("canvas-settings-work").toPath())).also{app=it}
+        compose.setContent{WFToolsTheme(false){Surface(Modifier.fillMaxSize()){HomeContent(model,{}, {},Modifier.fillMaxSize())}}}
+        compose.onNodeWithTag("home-settings").performClick()
+        compose.onNodeWithTag("home-middle-button-pan-toggle").assertExists()
+        compose.onNodeWithTag("home-right-button-pan-toggle").assertExists().performClick()
+        compose.onNodeWithTag("home-wheel-layer-scale-toggle").assertExists()
+        compose.onNodeWithTag("home-automatic-snapping-toggle").assertExists().performClick()
+        compose.onNodeWithTag("home-transform-handles-toggle").assertExists()
+        compose.onNodeWithTag("home-operation-status-toggle").assertExists()
+        compose.onNodeWithText("先选后拖模式没有选择元素时，左键拖动表盘。",substring=true).assertExists()
+        compose.onNodeWithText("空格 + 左键",substring=true).assertExists()
+        compose.runOnIdle{assertFalse(model.canvasInput.rightButtonPan);assertFalse(model.canvasInput.snapping);assertTrue(model.canvasInput.middleButtonPan)}
+    }
+
     @Test fun `home keeps header and footer fixed while only the recent list scrolls`() {
         val store=WatchDocumentStore(temp.newFolder("fixed-home-work").toPath());val preferences=EditorPreferences(temp.newFolder("fixed-home-prefs").toPath())
         repeat(14){index->val source=temp.root.toPath().resolve("recent-$index.watch");store.newDocument().use{store.save(it,source)};preferences.recordRecent(source,"最近表盘 $index")}

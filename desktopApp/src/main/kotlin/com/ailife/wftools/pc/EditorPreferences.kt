@@ -11,6 +11,14 @@ import java.util.Properties
 enum class ThemePreference { SYSTEM, LIGHT, DARK }
 data class PanelPreferences(val left: Float = 272f, val right: Float = 348f, val bottom: Float = 180f)
 data class WindowPreferences(val width: Int = 1280, val height: Int = 820)
+data class CanvasInputPreferences(
+    val middleButtonPan: Boolean = true,
+    val rightButtonPan: Boolean = true,
+    val wheelScalesSelectedLayer: Boolean = true,
+    val snapping:Boolean=true,
+    val showTransformHandles:Boolean=true,
+    val showOperationStatus:Boolean=true,
+)
 data class RecentProject(val path: String,val title: String,val openedAt: Long,val draftId: String? = null)
 data class PreviewPreferences(val device: DevicePreviewSettings = DevicePreviewSettings(), val workspace: WorkspaceViewState = WorkspaceViewState(), val simulation: Map<String, String> = emptyMap(), val snapping: Boolean = true,
     val operationMode: CanvasOperationMode = CanvasOperationMode.DIRECT_DRAG, val devicePreviewEnabled: Boolean = false, val showTransformHandles: Boolean = true,
@@ -76,9 +84,20 @@ class EditorPreferences(private val directory: Path = appData().resolve("prefere
     fun theme(): ThemePreference = runCatching { ThemePreference.valueOf(read("application.properties").getProperty("theme", "SYSTEM")) }.getOrDefault(ThemePreference.SYSTEM)
     fun panels(): PanelPreferences = read("application.properties").let { PanelPreferences(it.float("left", 272f, 180f, 520f), it.float("right", 348f, 240f, 560f), it.float("bottom", 180f, 160f, 600f)) }
     fun window(): WindowPreferences = read("application.properties").let { WindowPreferences(it.int("width", 1280, 640, 7680), it.int("height", 820, 420, 4320)) }
-    @Synchronized fun saveApplication(theme: ThemePreference, panels: PanelPreferences, window: WindowPreferences) = write("application.properties", Properties().apply {
+    fun canvasInput(): CanvasInputPreferences = read("application.properties").let { p -> CanvasInputPreferences(
+        middleButtonPan=p.getProperty("middleButtonPan")?.toBooleanStrictOrNull() ?: true,
+        rightButtonPan=p.getProperty("rightButtonPan")?.toBooleanStrictOrNull() ?: true,
+        wheelScalesSelectedLayer=p.getProperty("wheelScalesSelectedLayer")?.toBooleanStrictOrNull() ?: true,
+        snapping=p.getProperty("canvasSnapping")?.toBooleanStrictOrNull() ?: true,
+        showTransformHandles=p.getProperty("canvasTransformHandles")?.toBooleanStrictOrNull() ?: true,
+        showOperationStatus=p.getProperty("canvasOperationStatus")?.toBooleanStrictOrNull() ?: true,
+    ) }
+    @Synchronized fun saveApplication(theme: ThemePreference, panels: PanelPreferences, window: WindowPreferences) = saveApplication(theme,panels,window,canvasInput())
+    @Synchronized fun saveApplication(theme: ThemePreference, panels: PanelPreferences, window: WindowPreferences, canvasInput: CanvasInputPreferences) = write("application.properties", Properties().apply {
         setProperty("theme", theme.name); setProperty("left", panels.left.toString()); setProperty("right", panels.right.toString()); setProperty("bottom", panels.bottom.toString())
         setProperty("width", window.width.toString()); setProperty("height", window.height.toString())
+        setProperty("middleButtonPan",canvasInput.middleButtonPan.toString());setProperty("rightButtonPan",canvasInput.rightButtonPan.toString());setProperty("wheelScalesSelectedLayer",canvasInput.wheelScalesSelectedLayer.toString())
+        setProperty("canvasSnapping",canvasInput.snapping.toString());setProperty("canvasTransformHandles",canvasInput.showTransformHandles.toString());setProperty("canvasOperationStatus",canvasInput.showOperationStatus.toString())
     })
     fun preview(identity: String): PreviewPreferences {
         val p = read(key(identity))

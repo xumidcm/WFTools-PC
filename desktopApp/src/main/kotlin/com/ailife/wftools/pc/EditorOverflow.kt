@@ -10,7 +10,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.ailife.wftools.pc.preview.CanvasOperationMode
 
-@Composable fun EditorOverflow(expanded: Boolean,dismiss: () -> Unit,doc: DocumentController,commands: CommandDispatcher,theme: ThemePreference,onTheme: (ThemePreference)->Unit) {
+@Composable fun EditorOverflow(expanded: Boolean,dismiss: () -> Unit,doc: DocumentController,commands: CommandDispatcher,theme: ThemePreference,onTheme: (ThemePreference)->Unit,canvasInput:CanvasInputPreferences,onCanvasInput:(CanvasInputPreferences)->Unit) {
     var page by remember(expanded) { mutableStateOf("root") }
     DropdownMenu(expanded,dismiss) {
         if(page != "root") { DropdownMenuItem(text = { Text("返回") },leadingIcon = { Icon(Icons.Default.ChevronLeft,null) },onClick = { page = "root" }); HorizontalDivider() }
@@ -33,10 +33,14 @@ import com.ailife.wftools.pc.preview.CanvasOperationMode
                 listOf(CanvasOperationMode.DIRECT_DRAG to "鼠标直拖",CanvasOperationMode.SELECT_THEN_DRAG to "先选后拖").forEach { (mode,label) -> DropdownMenuItem(text = { Text(label) },leadingIcon = { RadioButton(doc.preview.operationMode == mode,null) },onClick = { doc.preview = doc.preview.copy(operationMode = mode) }) }
                 Text(if(doc.preview.operationMode==CanvasOperationMode.DIRECT_DRAG)"按住图层即可移动，拖动未选中的图层时自动切换目标。" else "先点击选择图层，再从画布任意位置拖动当前选区。",Modifier.widthIn(max=270.dp).padding(horizontal=16.dp,vertical=6.dp),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 HorizontalDivider()
-                DropdownMenuItem(text = { Text("自动吸附") },modifier = Modifier.testTag("automatic-snapping-toggle"),trailingIcon = { Checkbox(doc.preview.snapping,null) },onClick = { doc.preview = doc.preview.copy(snapping = !doc.preview.snapping) })
-                DropdownMenuItem(text = { Text("变换控制点") },modifier = Modifier.testTag("transform-handles-toggle"),trailingIcon = { Checkbox(doc.preview.showTransformHandles,null) },onClick = { doc.preview = doc.preview.copy(showTransformHandles = !doc.preview.showTransformHandles) })
-                Text(if(doc.preview.showTransformHandles) "显示八向缩放点与旋转拉杆" else "使用简洁选框，仅选择与移动",Modifier.widthIn(max = 270.dp).padding(horizontal = 16.dp,vertical = 6.dp),style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
-                DropdownMenuItem(text = { Text("显示操作状态提示") },modifier = Modifier.testTag("operation-status-toggle"),trailingIcon = { Checkbox(doc.preview.showOperationStatus,null) },onClick = { doc.preview = doc.preview.copy(showOperationStatus = !doc.preview.showOperationStatus) })
+                DropdownMenuItem(text={Text("中键拖动画布")},modifier=Modifier.testTag("editor-middle-button-pan-toggle"),trailingIcon={Checkbox(canvasInput.middleButtonPan,null)},onClick={onCanvasInput(canvasInput.copy(middleButtonPan=!canvasInput.middleButtonPan))})
+                DropdownMenuItem(text={Text("右键拖动画布")},modifier=Modifier.testTag("editor-right-button-pan-toggle"),trailingIcon={Checkbox(canvasInput.rightButtonPan,null)},onClick={onCanvasInput(canvasInput.copy(rightButtonPan=!canvasInput.rightButtonPan))})
+                DropdownMenuItem(text={Text("滚轮缩放选中元素")},modifier=Modifier.testTag("editor-wheel-layer-scale-toggle"),trailingIcon={Checkbox(canvasInput.wheelScalesSelectedLayer,null)},onClick={onCanvasInput(canvasInput.copy(wheelScalesSelectedLayer=!canvasInput.wheelScalesSelectedLayer))})
+                HorizontalDivider()
+                DropdownMenuItem(text={Text("自动吸附")},modifier=Modifier.testTag("automatic-snapping-toggle"),trailingIcon={Checkbox(canvasInput.snapping,null)},onClick={onCanvasInput(canvasInput.copy(snapping=!canvasInput.snapping))})
+                DropdownMenuItem(text={Text("变换控制点")},modifier=Modifier.testTag("transform-handles-toggle"),trailingIcon={Checkbox(canvasInput.showTransformHandles,null)},onClick={onCanvasInput(canvasInput.copy(showTransformHandles=!canvasInput.showTransformHandles))})
+                Text(if(canvasInput.showTransformHandles) "显示八向缩放点与旋转拉杆" else "使用简洁选框，仅选择与移动",Modifier.widthIn(max = 270.dp).padding(horizontal = 16.dp,vertical = 6.dp),style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
+                DropdownMenuItem(text={Text("显示操作状态提示")},modifier=Modifier.testTag("operation-status-toggle"),trailingIcon={Checkbox(canvasInput.showOperationStatus,null)},onClick={onCanvasInput(canvasInput.copy(showOperationStatus=!canvasInput.showOperationStatus))})
             }
             "theme" -> ThemePreference.entries.forEach { choice -> DropdownMenuItem(text = { Text(when(choice) { ThemePreference.SYSTEM -> "跟随 Windows"; ThemePreference.LIGHT -> "浅色"; ThemePreference.DARK -> "深色" }) },leadingIcon = { RadioButton(theme == choice,null) },onClick = { onTheme(choice) }) }
         }

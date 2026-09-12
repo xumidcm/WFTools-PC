@@ -33,6 +33,16 @@ class EditorPreferencesTest {
         preferences.savePreview("face",PreviewPreferences(DevicePreviewSettings(410,502)))
         assertEquals(ThemePreference.DARK,preferences.theme()); assertEquals(panels,preferences.panels()); assertEquals(window,preferences.window())
     }
+    @Test fun `canvas input switches are application wide and survive restart`() {
+        val dir=temp.newFolder().toPath();val preferences=EditorPreferences(dir)
+        assertEquals(CanvasInputPreferences(),preferences.canvasInput())
+        val changed=CanvasInputPreferences(middleButtonPan=false,rightButtonPan=true,wheelScalesSelectedLayer=false,
+            snapping=false,showTransformHandles=false,showOperationStatus=false)
+        preferences.saveApplication(ThemePreference.LIGHT,PanelPreferences(),WindowPreferences(),changed)
+        assertEquals(changed,EditorPreferences(dir).canvasInput())
+        preferences.savePreview("face",PreviewPreferences())
+        assertEquals(changed,EditorPreferences(dir).canvasInput())
+    }
     @Test fun `transform handles default on and device preview defaults off with independent saved choices`() {
         val preferences=EditorPreferences(temp.newFolder().toPath())
         val initial=preferences.preview("face")

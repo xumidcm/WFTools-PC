@@ -78,6 +78,12 @@ class EditorRedContractsTest {
         assertEquals(false,devicePreview!!.invoke(defaults))
         assertEquals(true,handles!!.invoke(defaults))
     }
+    @Test fun `preview canvas note points to shared global settings without stale document state`() {
+        val editor=editor()
+        compose.setContent { WFToolsTheme(false) { PreviewSettingsPanel(editor,Modifier.width(380.dp).height(760.dp)) } }
+        compose.onNodeWithText("首页“设置”",substring=true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("当前使用",substring=true).assertDoesNotExist()
+    }
     @Test fun `custom device size stays selected and exposes editable dimensions`() {
         val editor=editor()
         compose.setContent { WFToolsTheme(false) { PreviewSettingsPanel(editor,Modifier.width(380.dp).height(760.dp)) } }
@@ -132,16 +138,36 @@ class EditorRedContractsTest {
         compose.onNodeWithText("100% · 当前100%").assertDoesNotExist()
     }
     @Test fun `top finger action mode and overflow automatic snapping are independent`() {
-        val editor = editor(); val original = editor.view
-        workspace(editor)
+        val editor=editor();val original=editor.view;val originalPreview=editor.preview
+        val app=EditorApplicationModel(scope,EditorPreferences(temp.newFolder("snapping-app-prefs").toPath()))
+        val commands=CommandDispatcher(app,editor){}
+        compose.setContent{WFToolsTheme(false){Surface(Modifier.fillMaxSize()){EditorWorkspace(app,editor,commands,PanelPreferences(),{},DropRegistry())}}}
         compose.onNodeWithContentDescription("开启动作模式").performClick()
-        compose.runOnIdle { assertTrue(editor.render.interactionMode); assertTrue(editor.preview.snapping) }
+        compose.runOnIdle { assertTrue(editor.render.interactionMode); assertTrue(app.canvasInput.snapping) }
         compose.onNodeWithContentDescription("更多操作").performClick()
         compose.onNodeWithTag("workspace-settings-entry").performClick()
         compose.onNodeWithTag("automatic-snapping-toggle").performClick()
-        compose.runOnIdle { assertFalse(editor.preview.snapping); assertTrue(editor.render.interactionMode) }
+        compose.runOnIdle { assertFalse(app.canvasInput.snapping); assertTrue(editor.render.interactionMode) }
         // Closing a popup is intentionally outside the behavioural assertion: mode flags remain independent.
-        compose.runOnIdle { editor.render.interactionMode = false; assertFalse(editor.preview.snapping); assertEquals(original.revision,editor.view.revision); assertEquals(original.project,editor.view.project) }
+        compose.runOnIdle {
+            editor.render.interactionMode=false
+            assertEquals(originalPreview.snapping,editor.preview.snapping);assertEquals(originalPreview.showTransformHandles,editor.preview.showTransformHandles);assertEquals(originalPreview.showOperationStatus,editor.preview.showOperationStatus)
+            assertEquals(original.revision,editor.view.revision);assertEquals(original.project,editor.view.project)
+        }
+    }
+    @Test fun `overflow canvas page edits the same six application input switches`() {
+        val editor=editor();val app=EditorApplicationModel(scope,EditorPreferences(temp.newFolder("overflow-input-prefs").toPath()))
+        val commands=CommandDispatcher(app,editor){}
+        compose.setContent{WFToolsTheme(false){Surface(Modifier.fillMaxSize()){EditorWorkspace(app,editor,commands,PanelPreferences(),{},DropRegistry())}}}
+        compose.onNodeWithContentDescription("更多操作").performClick()
+        compose.onNodeWithTag("workspace-settings-entry").performClick()
+        compose.onNodeWithTag("editor-middle-button-pan-toggle").assertExists().performClick()
+        compose.onNodeWithTag("editor-right-button-pan-toggle").assertExists()
+        compose.onNodeWithTag("editor-wheel-layer-scale-toggle").assertExists().performClick()
+        compose.onNodeWithTag("automatic-snapping-toggle").assertExists().performClick()
+        compose.onNodeWithTag("transform-handles-toggle").assertExists().performClick()
+        compose.onNodeWithTag("operation-status-toggle").assertExists().performClick()
+        compose.runOnIdle{assertFalse(app.canvasInput.middleButtonPan);assertTrue(app.canvasInput.rightButtonPan);assertFalse(app.canvasInput.wheelScalesSelectedLayer);assertFalse(app.canvasInput.snapping);assertFalse(app.canvasInput.showTransformHandles);assertFalse(app.canvasInput.showOperationStatus)}
     }
     @Test fun `overflow exposes file edit layer and appearance settings entries`() {
         workspace(editor())
@@ -405,5 +431,57 @@ class EditorRedContractsTest {
             assertEquals(40.0,workspace.panY,0.001)
             assertEquals(before,editor.view.revision)
         }
+    }
+
+    @Test fun `select then drag with no selected layer pans the workspace`() {
+        val editor=editor();editor.session.clearSelection()
+        val before=editor.view.revision
+        var workspace by mutableStateOf(WorkspaceViewState())
+        compose.setContent{WFToolsTheme(false){WatchPreview(
+            editor.session,editor.view.revision,editor.render,DevicePreviewSettings(),workspace,
+            {workspace=it},{},Modifier.size(500.dp).testTag("empty-selection-pan-canvas"),
+            operationMode=CanvasOperationMode.SELECT_THEN_DRAG,
+        )}}
+        compose.onNodeWithTag("empty-selection-pan-canvas").performMouseInput{
+            moveTo(center);press();moveTo(center+Offset(70f,35f));release()
+        }
+        compose.runOnIdle{
+            assertFalse(workspace.fit)
+            assertEquals(70.0,workspace.panX,0.001);assertEquals(35.0,workspace.panY,0.001)
+            assertEquals(before,editor.view.revision)
+        }
+    }
+
+    @Test fun `disabled middle button pan leaves the workspace unchanged`() {
+        val editor=editor();var workspace by mutableStateOf(WorkspaceViewState())
+        compose.setContent{WFToolsTheme(false){WatchPreview(
+            editor.session,editor.view.revision,editor.render,DevicePreviewSettings(),workspace,
+            {workspace=it},{},Modifier.size(500.dp).testTag("disabled-middle-pan-canvas"),
+            middleButtonPanEnabled=false,
+        )}}
+        compose.onNodeWithTag("disabled-middle-pan-canvas").performMouseInput{
+            moveTo(center);press(button=MouseButton.Tertiary);moveTo(center+Offset(80f,40f));release(button=MouseButton.Tertiary)
+        }
+        compose.runOnIdle{assertEquals(WorkspaceViewState(),workspace)}
+    }
+
+    @Test fun `right button drag pans without opening the context menu but a short click opens it`() {
+        val editor=editor();val before=editor.view.revision
+        var workspace by mutableStateOf(WorkspaceViewState());var contextMenuAt:Offset?=null
+        compose.setContent{WFToolsTheme(false){WatchPreview(
+            editor.session,editor.view.revision,editor.render,DevicePreviewSettings(),workspace,
+            {workspace=it},{},Modifier.size(500.dp).testTag("right-pan-canvas"),
+            rightButtonPanEnabled=true,onContextMenu={contextMenuAt=it},
+        )}}
+        val canvas=compose.onNodeWithTag("right-pan-canvas")
+        canvas.performMouseInput{
+            moveTo(center);press(button=MouseButton.Secondary);moveTo(center+Offset(90f,45f));release(button=MouseButton.Secondary)
+        }
+        compose.runOnIdle{
+            assertEquals(90.0,workspace.panX,0.001);assertEquals(45.0,workspace.panY,0.001)
+            assertNull(contextMenuAt);assertEquals(before,editor.view.revision)
+        }
+        canvas.performMouseInput{moveTo(center);click(button=MouseButton.Secondary)}
+        compose.runOnIdle{assertNotNull(contextMenuAt)}
     }
 }

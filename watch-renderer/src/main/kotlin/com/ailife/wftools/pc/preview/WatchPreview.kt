@@ -58,6 +58,15 @@ data class PreviewDropGeometry(
 
 data class PreviewDocumentSnapshot(val project: WmWatchfaceProject, val layers: List<EditorLayer>, val selection: LayerSelection)
 private data class MiddlePanGesture(val start: Offset, val workspace: WorkspaceViewState, val scale: Double)
+private data class RightPanGesture(
+    val start:Offset,
+    val workspace:WorkspaceViewState,
+    val scale:Double,
+    val hitId:String?,
+    val order:List<String>,
+    val selection:LayerSelection,
+    val moved:Boolean=false,
+)
 
 private data class RuntimeBindingKey(val script: String, val themes: List<WmThemeSet>, val tags: Set<String>)
 private val runtimeTagPattern = Regex("\\{[^{}]+}")
@@ -181,12 +190,16 @@ fun WatchPreview(
     snapping: Boolean = true,
     operationMode: CanvasOperationMode = CanvasOperationMode.DIRECT_DRAG,
     showTransformHandles: Boolean = true,
+    middleButtonPanEnabled: Boolean = true,
+    rightButtonPanEnabled: Boolean = true,
+    wheelScalesSelectedLayer: Boolean = true,
     onDropGeometry: (PreviewDropGeometry) -> Unit = {},
     snapshot: PreviewDocumentSnapshot? = null,
     committedLayerAttributes: Map<String, Map<String, String>>? = null,
     onDocumentCommand: ((DocumentSession.() -> Unit) -> Unit)? = null,
     onLayerAttributesCommit: ((Map<String, Map<String, String>>, (Boolean) -> Unit) -> Unit)? = null,
     onTextEdit: (String, Offset) -> Unit = { _,_ -> },
+    onContextMenu: (Offset) -> Unit = {},
 ) {
     val project = snapshot?.project ?: remember(document.id, revision) { document.toWatchProject() }
     val layers = snapshot?.layers ?: remember(document.id, revision) { document.layers }
@@ -200,6 +213,8 @@ fun WatchPreview(
     var liveEdit by remember(document.id) { mutableStateOf(LiveEditHandoff()) }
     var gestureActive by remember(document.id) { mutableStateOf(false) }
     var middlePan by remember(document.id) { mutableStateOf<MiddlePanGesture?>(null) }
+    var rightPan by remember(document.id) { mutableStateOf<RightPanGesture?>(null) }
+    var pointerPanActive by remember(document.id) { mutableStateOf(false) }
     var spaceDown by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     val density = LocalDensity.current.density
@@ -214,6 +229,10 @@ fun WatchPreview(
     val currentSnapping by rememberUpdatedState(snapping)
     val currentMode by rememberUpdatedState(operationMode)
     val currentShowHandles by rememberUpdatedState(showTransformHandles)
+    val currentMiddleButtonPanEnabled by rememberUpdatedState(middleButtonPanEnabled)
+    val currentRightButtonPanEnabled by rememberUpdatedState(rightButtonPanEnabled)
+    val currentWheelScalesSelectedLayer by rememberUpdatedState(wheelScalesSelectedLayer)
+    val openContextMenu by rememberUpdatedState(onContextMenu)
     val currentRevision by rememberUpdatedState(revision)
     val currentLiveEdit by rememberUpdatedState(liveEdit)
     val updateWorkspace by rememberUpdatedState(onWorkspaceChange)
@@ -236,8 +255,8 @@ fun WatchPreview(
             kind to hypot(point.x-position.x,point.y-position.y)
         }.minByOrNull { it.second }?.takeIf { it.second <= 12.0*density }?.first
     }
-    val hoverCursor = remember(hoveredHandle,middlePan,spaceDown) { PointerIcon(Cursor(when {
-        middlePan != null || spaceDown -> Cursor.MOVE_CURSOR
+    val hoverCursor = remember(hoveredHandle,middlePan,pointerPanActive,spaceDown) { PointerIcon(Cursor(when {
+        middlePan != null || pointerPanActive || spaceDown -> Cursor.MOVE_CURSOR
         hoveredHandle != null -> transformHandleCursor(requireNotNull(hoveredHandle))
         else -> Cursor.DEFAULT_CURSOR
     })) }
@@ -288,20 +307,42 @@ fun WatchPreview(
             .onSizeChanged { size = it }
             .onGloballyPositioned { bounds = it.boundsInWindow() }
             .focusRequester(focus)
-            .onFocusChanged { if (!it.hasFocus) { spaceDown = false; middlePan = null; gestureActive = false } }
+            .onFocusChanged { if (!it.hasFocus) { spaceDown = false; middlePan = null; rightPan = null; pointerPanActive = false; gestureActive = false } }
             .onPointerEvent(PointerEventType.Press,PointerEventPass.Initial) { event ->
                 val change = event.changes.firstOrNull()
-                if (event.buttons.isTertiaryPressed && change != null && currentLiveEdit.values.isEmpty() && !currentExternalEditActive) {
+                if (event.buttons.isTertiaryPressed && change != null && currentLiveEdit.values.isEmpty() && !currentExternalEditActive &&
+                    canvasDragPans(CanvasDragButton.TERTIARY,currentMode,currentSelection.selected,middleButtonPanEnabled=currentMiddleButtonPanEnabled,rightButtonPanEnabled=currentRightButtonPanEnabled)) {
                     focus.requestFocus()
                     middlePan = MiddlePanGesture(change.position,currentWorkspace,currentWork.scale)
+                    pointerPanActive = true
                     gestureActive = true
+                    change.consume()
+                } else if(event.buttons.isSecondaryPressed && change != null && currentLiveEdit.values.isEmpty() && !currentExternalEditActive) {
+                    focus.requestFocus()
+                    val devicePoint=currentWork.toDevice(Point(change.position.x.toDouble(),change.position.y.toDouble()))
+                    val index=if(viewport.containsDevice(devicePoint,device,round))hit(viewport.deviceToDesign(devicePoint))else null
+                    rightPan=RightPanGesture(change.position,currentWorkspace,currentWork.scale,index?.let{currentLayers[it].id},currentLayers.map{it.id}.reversed(),currentSelection)
+                    gestureActive=true
                     change.consume()
                 }
             }
             .onPointerEvent(PointerEventType.Move,PointerEventPass.Initial) { event ->
                 val change = event.changes.firstOrNull()
                 val pan = middlePan
-                if (pan != null && change != null && event.buttons.isTertiaryPressed) {
+                val secondaryPan=rightPan
+                if(secondaryPan!=null&&change!=null&&event.buttons.isSecondaryPressed) {
+                    val moved=secondaryPan.moved||(change.position-secondaryPan.start).getDistance()>=3.0*density
+                    if(moved) {
+                        rightPan=secondaryPan.copy(moved=true)
+                        if(currentRightButtonPanEnabled) {
+                            pointerPanActive=true
+                            updateWorkspace(secondaryPan.workspace.copy(fit=false,zoom=secondaryPan.scale,
+                                panX=secondaryPan.workspace.panX+change.position.x-secondaryPan.start.x,
+                                panY=secondaryPan.workspace.panY+change.position.y-secondaryPan.start.y))
+                        }
+                    }
+                    change.consume()
+                } else if (pan != null && change != null && event.buttons.isTertiaryPressed) {
                     updateWorkspace(pan.workspace.copy(fit = false,zoom = pan.scale,
                         panX = pan.workspace.panX + change.position.x - pan.start.x,
                         panY = pan.workspace.panY + change.position.y - pan.start.y))
@@ -309,8 +350,20 @@ fun WatchPreview(
                 } else change?.let { hoveredHandle = handleAt(it.position) }
             }
             .onPointerEvent(PointerEventType.Release,PointerEventPass.Initial) { event ->
-                if (middlePan != null && !event.buttons.isTertiaryPressed) {
+                val secondaryPan=rightPan
+                if(secondaryPan!=null&&!event.buttons.isSecondaryPressed) {
+                    if(!secondaryPan.moved) {
+                        val hitId=secondaryPan.hitId
+                        if(!render.interactionMode&&hitId!=null&&hitId !in secondaryPan.selection.selected)command{select(hitId,secondaryPan.order)}
+                        openContextMenu(secondaryPan.start)
+                    }
+                    rightPan=null
+                    pointerPanActive=false
+                    gestureActive=false
+                    event.changes.forEach{it.consume()}
+                } else if (middlePan != null && !event.buttons.isTertiaryPressed) {
                     middlePan = null
+                    pointerPanActive = false
                     gestureActive = false
                     event.changes.forEach { it.consume() }
                 }
@@ -346,7 +399,7 @@ fun WatchPreview(
                 val devicePoint = currentWork.toDevice(Point(mouse.position.x.toDouble(),mouse.position.y.toDouble()))
                 val index = if (viewport.containsDevice(devicePoint,device,round)) hit(viewport.deviceToDesign(devicePoint)) else null
                 val hitId = index?.let { currentLayers[it].id }
-                when (canvasWheelAction(hitId,currentSelection.selected,event.keyboardModifiers.isCtrlPressed,render.interactionMode,false)) {
+                when (canvasWheelAction(hitId,currentSelection.selected,event.keyboardModifiers.isCtrlPressed,render.interactionMode,false,currentWheelScalesSelectedLayer)) {
                     CanvasWheelAction.IGNORE -> Unit
                     CanvasWheelAction.ZOOM_WORKSPACE -> {
                         val previous = currentWork
@@ -374,13 +427,11 @@ fun WatchPreview(
                         val downButtons = currentEvent.buttons
                         // Middle-button presses are handled by the raw desktop pointer events above;
                         // awaitFirstDown does not reliably expose them as a pressed change on Windows.
-                        if (downButtons.isTertiaryPressed) return@awaitEachGesture
+                        if (downButtons.isTertiaryPressed || downButtons.isSecondaryPressed) return@awaitEachGesture
                         gestureActive = true
-                        val secondary = downButtons.isSecondaryPressed
                         val ctrlAtDown = currentEvent.keyboardModifiers.isCtrlPressed
                         val shiftAtDown = currentEvent.keyboardModifiers.isShiftPressed
                         val ctrlPanCandidate = ctrlAtDown && downButtons.isPrimaryPressed && !spaceDown
-                        val hardPan = isCanvasPanGesture(false,spaceDown,ctrlPanCandidate)
                         val originalWorkspace = currentWorkspace
                         val initialWork = currentWork
                         val startDevice = initialWork.toDevice(Point(down.position.x.toDouble(), down.position.y.toDouble()))
@@ -389,6 +440,11 @@ fun WatchPreview(
                         val hitId = index?.let { currentLayers[it].id }
                         val order = currentLayers.map { it.id }.reversed()
                         val initialSelection = currentSelection
+                        val hardPan = canvasDragPans(
+                            CanvasDragButton.PRIMARY,
+                            currentMode,initialSelection.selected,middleButtonPanEnabled=currentMiddleButtonPanEnabled,rightButtonPanEnabled=currentRightButtonPanEnabled,
+                            spaceDown=spaceDown,ctrlPrimary=ctrlPanCandidate,
+                        )
                         val expectedSelection = hitId?.let { canvasPressSelection(initialSelection, it, order, ctrlAtDown, shiftAtDown) }
 
                         val initialFrame = selectedFrame(initialSelection.selected, currentProject, currentLayers, render.frame, document.workDir.toFile())
@@ -403,13 +459,12 @@ fun WatchPreview(
                             }.minByOrNull { it.second }?.takeIf { it.second <= 10.0 * density }?.first
                         } else null
 
-                        if (secondary && !render.interactionMode && hitId != null && hitId !in initialSelection.selected) command { select(hitId, order) }
-                        if (handle == null && !secondary && !hardPan && !ctrlPanCandidate && !render.interactionMode && currentMode == CanvasOperationMode.DIRECT_DRAG && hitId != null) {
+                        if (handle == null && !hardPan && !ctrlPanCandidate && !render.interactionMode && currentMode == CanvasOperationMode.DIRECT_DRAG && hitId != null) {
                             if (expectedSelection != initialSelection) command { select(hitId, order, ctrlAtDown, shiftAtDown) }
                         }
 
                         val targetIds = when {
-                            hardPan || ctrlPanCandidate || secondary || render.interactionMode -> emptySet()
+                            hardPan || ctrlPanCandidate || render.interactionMode -> emptySet()
                             handle != null -> initialSelection.selected
                             currentMode == CanvasOperationMode.DIRECT_DRAG -> canvasDragTargets(currentMode, hitId, expectedSelection?.selected ?: initialSelection.selected)
                             else -> canvasDragTargets(currentMode, hitId, initialSelection.selected)
@@ -428,14 +483,14 @@ fun WatchPreview(
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
                             if (!change.pressed) {
-                                if (!secondary && !render.interactionMode && moved && !panning && finalUpdates.isNotEmpty()) {
+                                if (!render.interactionMode && moved && !panning && finalUpdates.isNotEmpty()) {
                                     liveEdit = LiveEditHandoff().update(finalUpdates)
                                     commit(finalUpdates)
                                 } else {
                                     liveEdit = LiveEditHandoff()
-                                    if (!moved && !render.interactionMode && handle == null && !secondary && !panning) {
+                                    if (!moved && !render.interactionMode && handle == null && !panning) {
                                         val now = System.currentTimeMillis()
-                                        val tappedId = hitId?.let { currentLayers.getOrNull(index ?: -1)?.id }
+                                        val tappedId = hitId
                                         val doubleTap = tappedId != null && tappedId == lastTapId && now - lastTapAt in 1..450 &&
                                             (lastTapPosition - down.position).getDistance() <= 12.0 * density
                                         if (doubleTap && currentLayers.firstOrNull { it.id == tappedId }?.type in setOf("text", "text_curved")) {
@@ -466,6 +521,7 @@ fun WatchPreview(
                             moved = true
                             if (ctrlPanCandidate) panning = true
                             if (panning) {
+                                pointerPanActive = true
                                 updateWorkspace(originalWorkspace.copy(fit = false, zoom = initialWork.scale,
                                     panX = originalWorkspace.panX + change.position.x - down.position.x,
                                     panY = originalWorkspace.panY + change.position.y - down.position.y))
@@ -502,6 +558,7 @@ fun WatchPreview(
                         }
                     } finally {
                         gestureActive = false
+                        pointerPanActive = false
                         if (!liveEdit.pending) liveEdit = LiveEditHandoff()
                     }
                 }

@@ -35,16 +35,32 @@ fun canvasPressSelection(current: LayerSelection, id: String, order: List<String
 
 enum class CanvasWheelAction { ZOOM_WORKSPACE, SCALE_SELECTED_LAYER, IGNORE }
 
+enum class CanvasDragButton { PRIMARY, SECONDARY, TERTIARY }
+
 fun centeredWorkspaceZoom(state: WorkspaceViewState, currentScale: Double, scrollDelta: Double): WorkspaceViewState {
     val zoom = (currentScale * kotlin.math.exp(-scrollDelta * .14)).coerceIn(.05, 16.0)
     return state.copy(fit = false, zoom = zoom)
 }
 
-fun canvasWheelAction(hitId: String?, selectedIds: Set<String>, ctrl: Boolean, interactive: Boolean, gestureActive: Boolean): CanvasWheelAction = when {
+fun canvasWheelAction(hitId: String?, selectedIds: Set<String>, ctrl: Boolean, interactive: Boolean, gestureActive: Boolean, scaleSelectedLayer: Boolean = true): CanvasWheelAction = when {
     interactive || gestureActive -> CanvasWheelAction.IGNORE
-    ctrl -> CanvasWheelAction.ZOOM_WORKSPACE
+    ctrl || !scaleSelectedLayer -> CanvasWheelAction.ZOOM_WORKSPACE
     hitId != null && hitId in selectedIds -> CanvasWheelAction.SCALE_SELECTED_LAYER
     else -> CanvasWheelAction.ZOOM_WORKSPACE
+}
+
+fun canvasDragPans(
+    button: CanvasDragButton,
+    mode: CanvasOperationMode,
+    selection: Set<String>,
+    middleButtonPanEnabled: Boolean = true,
+    rightButtonPanEnabled: Boolean = true,
+    spaceDown: Boolean = false,
+    ctrlPrimary: Boolean = false,
+): Boolean = when (button) {
+    CanvasDragButton.TERTIARY -> middleButtonPanEnabled
+    CanvasDragButton.SECONDARY -> rightButtonPanEnabled
+    CanvasDragButton.PRIMARY -> spaceDown || ctrlPrimary || (mode == CanvasOperationMode.SELECT_THEN_DRAG && selection.isEmpty())
 }
 
 fun isCanvasPanGesture(tertiaryPressed: Boolean, spaceDown: Boolean, ctrlPrimary: Boolean): Boolean =

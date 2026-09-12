@@ -23,7 +23,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi)
             packageName = "WFTools-PC"
-            packageVersion = "0.1.1"
+            packageVersion = "0.1.3"
             description = "WatchMaker desktop editor"
             vendor = "WFTools-PC"
             modules("java.desktop", "java.xml", "java.logging", "java.net.http", "jdk.unsupported")
