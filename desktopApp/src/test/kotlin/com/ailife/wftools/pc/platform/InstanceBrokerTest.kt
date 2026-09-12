@@ -6,6 +6,8 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
 
 class InstanceBrokerTest {
     @get:Rule val temp=TemporaryFolder()
@@ -19,5 +21,15 @@ class InstanceBrokerTest {
             assertEquals(listOf(file),withTimeout(2000){primary.requests.receive()})
         }finally{primary.close()}
         InstanceBroker.openOrForward(emptyList(),directory)!!.close()
+    }
+
+    @Test fun `linux broker protects its directory and endpoint token`() {
+        val directory=temp.newFolder("private-broker").toPath()
+        if(!Files.getFileStore(directory).supportsFileAttributeView("posix"))return
+        val primary=InstanceBroker.openOrForward(emptyList(),directory)!!
+        try {
+            assertEquals(PosixFilePermissions.fromString("rwx------"),Files.getPosixFilePermissions(directory))
+            assertEquals(PosixFilePermissions.fromString("rw-------"),Files.getPosixFilePermissions(directory.resolve("endpoint")))
+        } finally {primary.close()}
     }
 }

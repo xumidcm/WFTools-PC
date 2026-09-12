@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.awt.awtEventOrNull
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -188,17 +189,18 @@ val layerTypes = listOf("image" to "图片", "image_gif" to "GIF 动画", "video
         .pointerInput(horizontal) {
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
-                var previousScreen=runCatching{java.awt.MouseInfo.getPointerInfo().location}.getOrNull()
+                var previousScreen=currentEvent.awtEventOrNull?.locationOnScreen
                 while(true) {
                     val event=awaitPointerEvent(PointerEventPass.Initial)
                     val change=event.changes.firstOrNull{it.id==down.id}?:break
-                    if(!change.pressed)break
-                    val screen=runCatching{java.awt.MouseInfo.getPointerInfo().location}.getOrNull()
+                    val screen=event.awtEventOrNull?.locationOnScreen
                     val screenDelta=if(screen!=null&&previousScreen!=null)if(horizontal)screen.y-previousScreen!!.y else screen.x-previousScreen!!.x else 0
                     val local=change.positionChange()
-                    val delta=if(screenDelta!=0)screenDelta.toFloat() else if(horizontal)local.y else local.x
+                    val localDelta=if(horizontal)local.y else local.x
+                    val delta=if(kotlin.math.abs(screenDelta.toFloat())>kotlin.math.abs(localDelta))screenDelta.toFloat() else localDelta
                     if(delta!=0f)current(delta/density)
                     previousScreen=screen
+                    if(!change.pressed)break
                     change.consume()
                 }
             }

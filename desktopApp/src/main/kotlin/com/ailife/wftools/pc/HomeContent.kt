@@ -24,7 +24,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
-import com.ailife.wftools.pc.platform.WindowsWatchFileAssociation
+import com.ailife.wftools.pc.platform.desktopPlatformLabel
+import com.ailife.wftools.pc.platform.watchFileAssociation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -96,7 +97,7 @@ internal fun performFileAssociationAction(
                 Surface(onClick={open("https://bilibili.com/space/1609437970","作者主页")},modifier=Modifier.weight(1f).testTag("developer-profile-link"),shape=RoundedCornerShape(12.dp),color=Color.Transparent) {
                     Row(Modifier.padding(6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
                         Image(painterResource("branding/developer.png"),"开发者头像",Modifier.size(46.dp).clip(CircleShape),contentScale=ContentScale.Crop)
-                        Column { Text("开发者 · 柚子皮",Modifier.testTag("developer-attribution"),fontWeight=FontWeight.SemiBold);Text("QQ · 3513903055",style=MaterialTheme.typography.bodySmall);Text("Windows 桌面版",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant) }
+                        Column { Text("开发者 · 柚子皮",Modifier.testTag("developer-attribution"),fontWeight=FontWeight.SemiBold);Text("QQ · 3513903055",style=MaterialTheme.typography.bodySmall);Text(desktopPlatformLabel(),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant) }
                     }
                 }
                 Column(horizontalAlignment=Alignment.End) {
@@ -134,7 +135,7 @@ internal fun performFileAssociationAction(
 
 @Composable private fun HomeSettingsDialog(currentTheme:ThemePreference,onTheme:(ThemePreference)->Unit,canvasInput:CanvasInputPreferences,onCanvasInput:(CanvasInputPreferences)->Unit,onDismiss:()->Unit) {
     val theme = when(currentTheme){ThemePreference.SYSTEM->"跟随系统";ThemePreference.LIGHT->"浅色";ThemePreference.DARK->"深色"}
-    val association=remember{WindowsWatchFileAssociation()}
+    val association=remember{watchFileAssociation()}
     val scope=rememberCoroutineScope()
     var associated by remember{mutableStateOf(false)}
     var associationLoaded by remember{mutableStateOf(false)}

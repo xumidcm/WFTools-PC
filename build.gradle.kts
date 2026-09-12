@@ -4,3 +4,9 @@ plugins {
     alias(libs.plugins.kotlin.compose) apply false
     alias(libs.plugins.compose.desktop) apply false
 }
+
+providers.gradleProperty("wftools.buildPlatform").orNull?.takeIf(String::isNotBlank)?.let { platform ->
+    subprojects {
+        layout.buildDirectory.set(rootProject.layout.projectDirectory.dir(".build/$platform/$name"))
+    }
+}

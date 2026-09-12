@@ -42,7 +42,7 @@ import com.ailife.wftools.pc.preview.CanvasOperationMode
                 Text(if(canvasInput.showTransformHandles) "显示八向缩放点与旋转拉杆" else "使用简洁选框，仅选择与移动",Modifier.widthIn(max = 270.dp).padding(horizontal = 16.dp,vertical = 6.dp),style = MaterialTheme.typography.bodySmall,color = MaterialTheme.colorScheme.onSurfaceVariant)
                 DropdownMenuItem(text={Text("显示操作状态提示")},modifier=Modifier.testTag("operation-status-toggle"),trailingIcon={Checkbox(canvasInput.showOperationStatus,null)},onClick={onCanvasInput(canvasInput.copy(showOperationStatus=!canvasInput.showOperationStatus))})
             }
-            "theme" -> ThemePreference.entries.forEach { choice -> DropdownMenuItem(text = { Text(when(choice) { ThemePreference.SYSTEM -> "跟随 Windows"; ThemePreference.LIGHT -> "浅色"; ThemePreference.DARK -> "深色" }) },leadingIcon = { RadioButton(theme == choice,null) },onClick = { onTheme(choice) }) }
+            "theme" -> ThemePreference.entries.forEach { choice -> DropdownMenuItem(text = { Text(when(choice) { ThemePreference.SYSTEM -> "跟随系统"; ThemePreference.LIGHT -> "浅色"; ThemePreference.DARK -> "深色" }) },leadingIcon = { RadioButton(theme == choice,null) },onClick = { onTheme(choice) }) }
         }
     }
 }

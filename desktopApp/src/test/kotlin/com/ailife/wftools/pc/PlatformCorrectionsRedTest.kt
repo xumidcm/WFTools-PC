@@ -27,7 +27,7 @@ class PlatformCorrectionsRedTest {
     @Test fun `watch association writes the current launcher and restores the previous default`() {
         val registry=FakeRegistry();val extension="HKCU\\Software\\Classes\\.watch"
         registry.write(extension,null,"Other.Watch")
-        val launcher=Path.of("C:/Program Files/WFTools-PC/WFTools-PC.exe")
+        val launcher=temp.newFile("WFTools-PC.exe").toPath().toAbsolutePath().normalize()
         val association=WindowsWatchFileAssociation(registry){launcher}
         assertFalse(association.isAssociated())
         association.associate()
@@ -49,7 +49,7 @@ class PlatformCorrectionsRedTest {
             }
             override fun deleteValue(key:String,name:String?){values.remove(key to name)}
         }
-        val association=WindowsWatchFileAssociation(registry){Path.of("C:/Program Files/WFTools-PC/WFTools-PC.exe")}
+        val association=WindowsWatchFileAssociation(registry){temp.newFile("failed-shell-WFTools-PC.exe").toPath().toAbsolutePath().normalize()}
 
         assertThrows(IllegalStateException::class.java){association.associate()}
 
@@ -85,6 +85,23 @@ class PlatformCorrectionsRedTest {
         val icons=nativeDialogIconImages(null)
         assertTrue(icons.isNotEmpty())
         assertTrue(icons.all{it.getWidth(null)>0&&it.getWidth(null)==it.getHeight(null)})
+    }
+
+    @Test fun `relative JNA library name resolves beside the expected Linux library`() {
+        val directory=temp.newFolder("jna-linux").toPath()
+        val expected=directory.resolve("libvlc.so")
+        Files.writeString(expected,"fixture")
+        assertEquals(expected.toRealPath(),resolveLoadedNativeLibrary(Path.of("libvlc.so"),expected,listOf(expected)))
+    }
+
+    @Test fun `relative JNA library name reports the actually mapped Linux library`() {
+        val expectedDirectory=temp.newFolder("expected-vlc").toPath()
+        val loadedDirectory=temp.newFolder("loaded-vlc").toPath()
+        val expected=expectedDirectory.resolve("libvlc.so")
+        val loaded=loadedDirectory.resolve("libvlc.so.5")
+        Files.writeString(expected,"expected");Files.writeString(loaded,"loaded")
+
+        assertEquals(loaded.toRealPath(),resolveLoadedNativeLibrary(Path.of("libvlc.so"),expected,listOf(loaded)))
     }
 
     @Test fun `non h264 videos are transcoded to temporary mp4 while h264 files remain untouched`() {

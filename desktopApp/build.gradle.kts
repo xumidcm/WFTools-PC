@@ -21,9 +21,10 @@ compose.desktop {
     application {
         mainClass = "com.ailife.wftools.pc.MainKt"
         nativeDistributions {
-            targetFormats(TargetFormat.Msi)
+            if (System.getProperty("os.name").lowercase().contains("linux")) targetFormats(TargetFormat.Deb)
+            else targetFormats(TargetFormat.Msi)
             packageName = "WFTools-PC"
-            packageVersion = "0.1.3"
+            packageVersion = "0.1.4"
             description = "WatchMaker desktop editor"
             vendor = "WFTools-PC"
             modules("java.desktop", "java.xml", "java.logging", "java.net.http", "jdk.unsupported")
@@ -33,6 +34,9 @@ compose.desktop {
                 menu = true
                 shortcut = true
                 upgradeUuid = "19a1ac0c-fdd0-4411-9dd5-a2b95f1ce108"
+            }
+            linux {
+                iconFile.set(project.file("src/main/resources/icons/wftools.png"))
             }
         }
     }

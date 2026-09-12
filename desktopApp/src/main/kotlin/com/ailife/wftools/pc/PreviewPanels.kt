@@ -89,7 +89,7 @@ private fun randomizePreview(doc:DocumentController) {
 @Composable private fun PreviewSimulationControls(doc:DocumentController) {
     val sections=remember { previewSections }
     WmParamCard("实时数据") {
-        Text("Windows 桌面端目前没有手机传感器与定位数据源；以下实时开关明确保持不可用，手动模拟仍可完整编辑。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("桌面端目前没有手机传感器与定位数据源；以下实时开关明确保持不可用，手动模拟仍可完整编辑。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         listOf("电量","天气","传感器","连接","设备模式","内存 / 存储").forEach { label->Row(verticalAlignment=Alignment.CenterVertically){Text("实时$label",Modifier.weight(1f));Switch(false,null,enabled=false)} }
     }
     sections.forEach { section->WmCollapsible(section.title) { section.fields.forEach { field->SimulationField(doc,field) } } }

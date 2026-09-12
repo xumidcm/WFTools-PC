@@ -393,7 +393,7 @@ class EditorRedContractsTest {
         var moved=0f
         compose.setContent { WFToolsTheme(false) { Box(Modifier.width(120.dp).height(500.dp)) { Splitter(false,"left-panel-splitter"){moved+=it} } } }
         compose.onNodeWithTag("left-panel-splitter").performMouseInput { moveTo(center);press();moveBy(Offset(36f,0f));release() }
-        compose.runOnIdle { assertTrue("侧栏必须跟随这次短拖动",moved>20f) }
+        compose.runOnIdle { assertTrue("侧栏必须跟随这次短拖动，实际位移=$moved",moved>20f) }
     }
 
     @Test fun `save as is placed immediately to the right of save`() {

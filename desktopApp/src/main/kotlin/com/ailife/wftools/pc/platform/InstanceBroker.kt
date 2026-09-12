@@ -39,14 +39,17 @@ class InstanceBroker private constructor(
     companion object {
         fun openOrForward(paths:List<Path>,directory:Path=appData().resolve("instance")):InstanceBroker? {
             require(paths.size<=64){"一次最多打开 64 个表盘。"}
-            Files.createDirectories(directory)
+            ensureOwnerOnlyDirectory(directory)
             val channel=FileChannel.open(directory.resolve("application.lock"),CREATE,WRITE)
             val lock=try{channel.tryLock()}catch(_:OverlappingFileLockException){null}
             if(lock!=null) {
                 try {
                     val socket=ServerSocket(0,16,InetAddress.getLoopbackAddress())
                     val token=UUID.randomUUID().toString()
-                    Files.writeString(directory.resolve("endpoint"),"${socket.localPort}\n$token")
+                    val endpoint=directory.resolve("endpoint")
+                    if(Files.exists(endpoint))ensureOwnerOnlyFile(endpoint)
+                    Files.writeString(endpoint,"${socket.localPort}\n$token",CREATE,TRUNCATE_EXISTING,WRITE)
+                    ensureOwnerOnlyFile(endpoint)
                     return InstanceBroker(channel,lock,socket,token).also{it.requests.trySend(paths)}
                 } catch(error:Throwable){lock.release();channel.close();throw error}
             }
@@ -69,4 +72,11 @@ class InstanceBroker private constructor(
         }
     }
 }
-fun appData():Path=Path.of(System.getenv("LOCALAPPDATA") ?: System.getProperty("user.home"),"WFTools-PC")
+fun appData(
+    os:DesktopOperatingSystem=desktopOperatingSystem(),
+    environment:Map<String,String> = System.getenv(),
+    userHome:Path=Path.of(System.getProperty("user.home")),
+):Path=when(os) {
+    DesktopOperatingSystem.LINUX -> linuxXdgConfigHome(userHome,environment).resolve("WFTools-PC")
+    else -> Path.of(environment["LOCALAPPDATA"] ?: userHome.toString(),"WFTools-PC")
+}

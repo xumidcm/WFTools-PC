@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder
 import com.google.gson.JsonParser
 import java.nio.channels.FileChannel
 import java.nio.file.*
+import java.nio.file.attribute.PosixFilePermissions
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.security.MessageDigest
@@ -25,6 +26,7 @@ import javax.imageio.stream.MemoryCacheImageInputStream
 class WatchDocumentStore(val workspaceRoot: Path = defaultWorkspace()) {
     private val gson = Gson()
     private val snapshotGson = GsonBuilder().disableHtmlEscaping().create()
+    init { ensurePrivateDirectory(workspaceRoot) }
 
     fun open(path: Path): DocumentSession {
         val source = path.toAbsolutePath().normalize()
@@ -32,6 +34,7 @@ class WatchDocumentStore(val workspaceRoot: Path = defaultWorkspace()) {
         val home = workspaceRoot.resolve(id)
         try {
             if (!Files.isRegularFile(source)) throw WatchDocumentException.OpenFailed("找不到表盘文件：$source")
+            ensurePrivateDirectory(home)
             Files.createDirectories(home.resolve("content"))
             val before = hashFile(source)
             Files.copy(source, home.resolve("original.zip"))
@@ -52,6 +55,7 @@ class WatchDocumentStore(val workspaceRoot: Path = defaultWorkspace()) {
     fun newDocument(): DocumentSession {
         try {
             val id = UUID.randomUUID().toString(); val home = workspaceRoot.resolve(id)
+            ensurePrivateDirectory(home)
             Files.createDirectories(home.resolve("content"))
             val xml = """<?xml version="1.0" encoding="UTF-8"?><Watch name="新建表盘" width="512" height="512" shape="S" bg_color="000000" protection="n"><Layers/></Watch>"""
             val state = DocumentSnapshot(WatchXml.serialize(WatchXml.parse(xml)), emptyList())
@@ -183,6 +187,7 @@ class WatchDocumentStore(val workspaceRoot: Path = defaultWorkspace()) {
         try {
             UUID.fromString(id)
             val home = workspaceRoot.resolve(id)
+            ensurePrivateDirectory(home)
             if (Files.exists(home.resolve("discarded"))) throw WatchDocumentException.RecoveryFailed("此草稿已被放弃。请重新打开源表盘开始新的编辑。")
             val knownHashes = java.util.IdentityHashMap<DocumentSnapshot, String>()
             val journal = readJournal(home, knownHashes = knownHashes)
@@ -540,7 +545,20 @@ class WatchDocumentStore(val workspaceRoot: Path = defaultWorkspace()) {
         private val STATE_HASH = Regex("[a-f0-9]{64}")
         private val STATE_FILE = Regex("[a-f0-9]{64}\\.json")
         private val DERIVED_NAMES = setOf("preview.jpg", "preview_dim.jpg")
-        private fun defaultWorkspace(): Path = Path.of(System.getenv("LOCALAPPDATA") ?: System.getProperty("user.home"), "WFTools-PC", "workspace")
+        internal fun defaultWorkspace(
+            environment:Map<String,String> = System.getenv(),
+            userHome:Path = Path.of(System.getProperty("user.home")),
+            osName:String = System.getProperty("os.name").orEmpty(),
+        ):Path = if(osName.lowercase(Locale.ROOT).contains("linux")) {
+            val data=environment["XDG_DATA_HOME"]?.takeIf{it.startsWith('/')&&it.isNotBlank()}?.let(Path::of)?:userHome.resolve(".local/share")
+            data.resolve("WFTools-PC/workspace")
+        } else Path.of(environment["LOCALAPPDATA"] ?: userHome.toString(),"WFTools-PC","workspace")
+        private fun ensurePrivateDirectory(path:Path) {
+            Files.createDirectories(path)
+            if(System.getProperty("os.name").orEmpty().lowercase(Locale.ROOT).contains("linux")&&
+                runCatching{Files.getFileStore(path).supportsFileAttributeView("posix")}.getOrDefault(false))
+                Files.setPosixFilePermissions(path,PosixFilePermissions.fromString("rwx------"))
+        }
         internal fun signature(snapshot: DocumentSnapshot): String = hashBytes((snapshot.xml + "\u0000" +
             snapshot.importedAssets.toSortedMap().entries.joinToString("\u0000") { "${it.key}=${it.value}" } +
             "\u0000script:" + (snapshot.scriptOverride?.let { "override:$it" } ?: "original") +

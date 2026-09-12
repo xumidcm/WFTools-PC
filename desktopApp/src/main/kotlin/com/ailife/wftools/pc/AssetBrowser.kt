@@ -21,6 +21,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import com.ailife.wftools.pc.core.EditorLayer
 import com.ailife.wftools.pc.platform.chooseAssets
+import com.ailife.wftools.pc.platform.showInFileManager
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import kotlin.math.roundToInt
@@ -100,7 +101,7 @@ import kotlin.math.roundToInt
                 DropdownMenu(menu!=null,{menu=null},modifier=Modifier.testTag("asset-context-menu")){menu?.first?.let{asset->
                     DropdownMenuItem(text={Text("创建图层")},enabled=assetTargetAttribute(asset)!=null&&!doc.editingBlocked,leadingIcon={Icon(Icons.Default.Add,null)},onClick={menu=null;doc.createLayerFromAsset(asset)})
                     DropdownMenuItem(text={Text("复制资源路径")},leadingIcon={Icon(Icons.Default.ContentCopy,null)},onClick={Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(asset.relative),null);menu=null})
-                    DropdownMenuItem(text={Text("在资源管理器中显示")},leadingIcon={Icon(Icons.Default.FolderOpen,null)},onClick={runCatching{ProcessBuilder("explorer.exe","/select,",asset.path.toString()).start()}.onFailure{doc.error="无法打开资源管理器：${it.message}"};menu=null})
+                    DropdownMenuItem(text={Text("在文件管理器中显示")},leadingIcon={Icon(Icons.Default.FolderOpen,null)},onClick={runCatching{showInFileManager(asset.path)}.onFailure{doc.error="无法打开文件管理器：${it.message}"};menu=null})
                     HorizontalDivider()
                     DropdownMenuItem(text={Text("删除素材",color=MaterialTheme.colorScheme.error)},enabled=!doc.editingBlocked,leadingIcon={Icon(Icons.Default.Delete,null,tint=MaterialTheme.colorScheme.error)},onClick={delete=asset;menu=null})
                 }}

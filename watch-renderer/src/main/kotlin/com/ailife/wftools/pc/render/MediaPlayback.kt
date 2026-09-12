@@ -6,6 +6,7 @@ import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.Semaphore
+import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.*
@@ -76,10 +77,44 @@ internal fun createBundledMediaPlayerFactory(options:List<String>):MediaPlayerFa
     return MediaPlayerFactory(null as NativeDiscovery?,*(listOf("--quiet","--no-video-title-show")+options).toTypedArray())
 }
 
+internal fun vlcLibraryNames(osName:String=System.getProperty("os.name").orEmpty()):List<String> =
+    if(osName.lowercase(Locale.ROOT).contains("win"))listOf("libvlc.dll")else listOf("libvlc.so","libvlc.so.5")
+
+internal fun vlcExecutableName(osName:String=System.getProperty("os.name").orEmpty()):String =
+    if(osName.lowercase(Locale.ROOT).contains("win"))"vlc.exe" else "vlc"
+
+internal fun findVlcLibraryDirectory(candidates:List<File>,osName:String=System.getProperty("os.name").orEmpty()):File? =
+    candidates.firstOrNull{directory->vlcLibraryNames(osName).any{name->File(directory,name).isFile}}
+
+internal fun findVlcExecutable(runtimeDirectory:File?,pathEntries:List<File>,osName:String=System.getProperty("os.name").orEmpty()):File {
+    val name=vlcExecutableName(osName)
+    return (listOfNotNull(runtimeDirectory)+pathEntries).asSequence().map{File(it,name)}.firstOrNull(File::isFile)
+        ?: error("找不到视频转换器 $name。Linux 请安装 vlc；Windows 请重新安装 WFTools-PC。")
+}
+
+private fun vlcDirectoryCandidates():List<File> = buildList {
+    System.getProperty("compose.application.resources.dir")?.let{add(File(it,"vlc"))}
+    System.getenv("WFTOOLS_VLC_HOME")?.takeIf(String::isNotBlank)?.let{add(File(it))}
+    if(System.getProperty("os.name").orEmpty().lowercase(Locale.ROOT).contains("win")) {
+        add(File("D:/DevTools/WFTools-PC/vlc/vlc-3.0.23"))
+    } else {
+        System.getProperty("java.library.path").orEmpty().split(File.pathSeparatorChar).filter(String::isNotBlank).mapTo(this,::File)
+        add(File("/usr/lib/x86_64-linux-gnu"));add(File("/usr/lib64"));add(File("/usr/lib"))
+    }
+}
+
 internal fun locateBundledVlcDirectory():File {
-    val packaged=System.getProperty("compose.application.resources.dir")?.let {File(it,"vlc")}
-    val candidates=if(packaged!=null)listOf(packaged) else listOfNotNull(System.getenv("WFTOOLS_VLC_HOME")?.let(::File),File("D:/DevTools/WFTools-PC/vlc/vlc-3.0.23"))
-    return candidates.firstOrNull{File(it,"libvlc.dll").isFile} ?: error("找不到随程序提供的 LibVLC 运行库。")
+    return findVlcLibraryDirectory(vlcDirectoryCandidates()) ?: error("找不到 LibVLC 运行库。Linux 请安装 libvlc；Windows 请重新安装 WFTools-PC。")
+}
+
+fun resolvedVlcLibraryFile():File {
+    val directory=locateBundledVlcDirectory()
+    return vlcLibraryNames().asSequence().map{File(directory,it)}.first(File::isFile)
+}
+
+internal fun locateVlcExecutable():File {
+    val paths=System.getenv("PATH").orEmpty().split(File.pathSeparatorChar).filter(String::isNotBlank).map(::File)
+    return findVlcExecutable(locateBundledVlcDirectory(),paths)
 }
 
 class VideoPlayback(factory:MediaPlayerFactory,private val file:File):AutoCloseable {

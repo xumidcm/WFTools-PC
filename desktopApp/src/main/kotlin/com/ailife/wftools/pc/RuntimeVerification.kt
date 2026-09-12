@@ -3,6 +3,10 @@ package com.ailife.wftools.pc
 import com.ailife.wftools.pc.core.WatchDocumentStore
 import com.ailife.wftools.pc.render.MediaPlayback
 import com.ailife.wftools.pc.render.ThumbnailExporter
+import com.ailife.wftools.pc.render.WatchVideoCompatibility
+import com.ailife.wftools.pc.render.resolvedVlcLibraryFile
+import com.ailife.wftools.pc.platform.DesktopOperatingSystem
+import com.ailife.wftools.pc.platform.desktopOperatingSystem
 import com.google.gson.GsonBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -71,28 +75,40 @@ private suspend fun verifyRuntimeMedia(directory:Path,videoArgument:String,repor
     report["media"]=result
     val started=System.nanoTime()
     var media:MediaPlayback?=null
+    var prepared:PreparedVideoImports?=null
     try {
         val video=Path.of(videoArgument).toAbsolutePath().normalize()
         result["source"]=video.toString()
         require(Files.isRegularFile(video)){"Video fixture does not exist: $video"}
         result["sourceSHA256before"]=runtimeSha256(video)
+        val sourceCodec=WatchVideoCompatibility.codecName(video)
+        result["sourceCodec"]=sourceCodec
+        val imports=VideoImportPreparer().prepare(listOf(video)).also{prepared=it}
+        val playbackVideo=imports.paths.single()
+        val transcoded=playbackVideo!=video
+        result["transcodedToH264"]=transcoded
+        if(!WatchVideoCompatibility.isH264Codec(sourceCodec)) {
+            check(transcoded){"Non-H.264 runtime fixture was not transcoded."}
+            check(WatchVideoCompatibility.isH264Codec(WatchVideoCompatibility.codecName(playbackVideo))){"Runtime transcoder did not produce H.264 video."}
+        }
 
-        // A missing packaged property is a verification failure. In development,
-        // MediaPlayback can choose WFTOOLS_VLC_HOME or D:, which cannot prove that
-        // the delivered portable distribution contains its own working runtime.
-        val resourceProperty=System.getProperty("compose.application.resources.dir")
-        require(!resourceProperty.isNullOrBlank()){ "Packaged resources directory is missing; developer VLC fallback is forbidden in media verification." }
-        val resources=Path.of(resourceProperty).toRealPath()
-        val expectedLibrary=resources.resolve("vlc/libvlc.dll").toRealPath()
-        require(expectedLibrary.startsWith(resources)){"Packaged VLC library resolves outside the delivered resources directory."}
+        val os=desktopOperatingSystem()
+        val expectedLibrary=resolvedVlcLibraryFile().toPath().toRealPath()
         result["expectedLibVlc"]=expectedLibrary.toString()
-        result["pluginsCachePresent"]=Files.isRegularFile(resources.resolve("vlc/plugins/plugins.dat"))
+        result["runtimeKind"]=if(os==DesktopOperatingSystem.WINDOWS)"packaged" else "system"
+        if(os==DesktopOperatingSystem.WINDOWS) {
+            val resourceProperty=System.getProperty("compose.application.resources.dir")
+            require(!resourceProperty.isNullOrBlank()){ "Packaged resources directory is missing; developer VLC fallback is forbidden in media verification." }
+            val resources=Path.of(resourceProperty).toRealPath()
+            require(expectedLibrary.startsWith(resources)){"Packaged VLC library resolves outside the delivered resources directory."}
+            result["pluginsCachePresent"]=Files.isRegularFile(resources.resolve("vlc/plugins/plugins.dat"))
+        }
 
         var phase=System.nanoTime()
         val owner=MediaPlayback().also { media=it }
         timings["sessionCreate"]=(System.nanoTime()-phase)/1_000_000
         phase=System.nanoTime()
-        val player=owner.video(video.toFile())
+        val player=owner.video(playbackVideo.toFile())
         timings["initializeAndCreatePlayer"]=(System.nanoTime()-phase)/1_000_000
 
         // Query the library already registered by VLCJ's direct native binding.
@@ -101,10 +117,11 @@ private suspend fun verifyRuntimeMedia(directory:Path,videoArgument:String,repor
         val binding=Class.forName("uk.co.caprica.vlcj.binding.lib.LibVlc")
         val nativeLibrary=Class.forName("com.sun.jna.Native")
             .getMethod("getNativeLibrary",Class::class.java).invoke(null,binding)
-        val actualLibrary=(nativeLibrary.javaClass.getMethod("getFile").invoke(nativeLibrary) as File).toPath().toRealPath()
+        val loadedLibrary=(nativeLibrary.javaClass.getMethod("getFile").invoke(nativeLibrary) as File).toPath()
+        val actualLibrary=resolveLoadedNativeLibrary(loadedLibrary,expectedLibrary,currentProcessMappedLibraries())
         result["loadedLibVlc"]=actualLibrary.toString()
-        result["packagedRuntime"]=actualLibrary==expectedLibrary
-        check(actualLibrary==expectedLibrary){"VLC loaded from $actualLibrary instead of packaged library $expectedLibrary"}
+        result["expectedRuntimeLoaded"]=actualLibrary==expectedLibrary
+        check(actualLibrary==expectedLibrary){"VLC loaded from $actualLibrary instead of expected library $expectedLibrary"}
         result["vlcVersion"]=binding.getMethod("libvlc_get_version").invoke(null)?.toString()
 
         phase=System.nanoTime()
@@ -137,10 +154,31 @@ private suspend fun verifyRuntimeMedia(directory:Path,videoArgument:String,repor
             result["status"]="failed";result["closeError"]=error.toString()
             throw error
         } finally {
+            prepared?.close()
             timings["close"]=(System.nanoTime()-phase)/1_000_000
             timings["total"]=(System.nanoTime()-started)/1_000_000
         }
     }
+}
+
+internal fun resolveLoadedNativeLibrary(loaded:Path,expected:Path,mappedLibraries:List<Path> = currentProcessMappedLibraries()):Path {
+    if(loaded.isAbsolute)return loaded.toRealPath()
+    val requested=loaded.fileName.toString()
+    val candidates=mappedLibraries.asSequence().filter { mapped ->
+        val name=mapped.fileName?.toString().orEmpty()
+        name==requested||name.startsWith("$requested.")
+    }.mapNotNull{runCatching{it.toRealPath()}.getOrNull()}.distinct().toList()
+    check(candidates.size==1){"无法从进程映射中唯一确认 $requested；预期运行库为 ${expected.toAbsolutePath().normalize()}，实际候选为 $candidates"}
+    return candidates.single()
+}
+
+internal fun currentProcessMappedLibraries(maps:Path=Path.of("/proc/self/maps")):List<Path> {
+    if(!Files.isRegularFile(maps))return emptyList()
+    return Files.readAllLines(maps).mapNotNull { line ->
+        val encoded=line.substringAfterLast(' ',"").takeIf{it.startsWith('/')}?:return@mapNotNull null
+        val decoded=Regex("\\\\([0-7]{3})").replace(encoded){match->match.groupValues[1].toInt(8).toChar().toString()}
+        runCatching{Path.of(decoded)}.getOrNull()
+    }.distinct()
 }
 
 private fun runtimeSilentWav():ByteArray {
