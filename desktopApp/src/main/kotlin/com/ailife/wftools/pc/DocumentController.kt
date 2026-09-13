@@ -6,6 +6,11 @@ import com.ailife.wftools.pc.preview.*
 import com.ailife.wftools.pc.render.PreviewCaptureExporter
 import com.ailife.wftools.pc.render.RenderSession
 import com.ailife.wftools.pc.render.ThumbnailExporter
+import com.ailife.wftools.agent.model.AgentFeatureSettings
+import com.ailife.wftools.agent.storage.AgentConversationRepository
+import com.ailife.wftools.agent.storage.AgentProviderStore
+import com.ailife.wftools.agent.workspace.WorkspaceManager
+import com.ailife.wftools.pc.platform.appData
 import com.ailife.wftools2.domain.editor.watchmaker.WmScriptRuntime
 import com.ailife.wftools2.domain.editor.watchmaker.WmTagsData
 import com.ailife.wftools2.domain.editor.watchmaker.WmWatchfaceProject
@@ -34,6 +39,7 @@ class DocumentController private constructor(
 ) {
     private val mutex = Mutex()
     private var closed = false
+    private var agentWriteLock by mutableStateOf(false)
     private var pending by mutableStateOf(0)
     private var blocking by mutableStateOf(0)
     private var progressing by mutableStateOf(0)
@@ -42,7 +48,7 @@ class DocumentController private constructor(
         internal set
     val busy get() = pending > 0
     val showProgress get() = progressing > 0
-    val editingBlocked get() = blocking > 0 || closed
+    val editingBlocked get() = blocking > 0 || agentWriteLock || closed
     var error by mutableStateOf<String?>(null)
     var notice by mutableStateOf<String?>(null)
     var noticeAction by mutableStateOf<NoticeAction?>(null)
@@ -57,6 +63,7 @@ class DocumentController private constructor(
     var query by mutableStateOf("")
     var typeFilter by mutableStateOf("")
     var requestedInspectorTab by mutableStateOf<String?>(null)
+    var agentFullscreen by mutableStateOf(false)
     var globalScriptEditorOpen by mutableStateOf(false)
     var globalScriptDraft by mutableStateOf(initial.project.globalScript); private set
     var globalScriptDraftError by mutableStateOf<String?>(null); private set
@@ -180,8 +187,18 @@ class DocumentController private constructor(
         finally { prepared.asReversed().forEach(PreparedVideoImports::close) }
     }
     fun refreshFromPreview() = task("", block = {})
-    private fun task(label: String, refreshAssets: Boolean = false, blockingOperation: Boolean = false, showProgress:Boolean=false, onSuccess: () -> Unit = {}, onFinished: () -> Unit = {}, onFailure: (Exception) -> Unit = {}, block: suspend () -> Unit) {
-        if(closed) return
+    /** Publish an Agent transaction before it releases the editor write barrier. */
+    fun refreshFromAgent() {
+        val next = withAgentSession { snapshot(session, view, refreshAssets = true) }
+        view = next
+        if (!hasGlobalScriptDraft) globalScriptDraft = next.project.globalScript
+    }
+    /** Shares the document mutex with normal editor commands. Agent calls originate off the UI thread. */
+    fun <T> withAgentSession(block: () -> T): T = runBlocking { mutex.withLock { withContext(Dispatchers.IO) { block() } } }
+    fun beginAgentWrite() { agentWriteLock = true }
+    fun endAgentWrite() { try { refreshFromAgent() } finally { agentWriteLock = false } }
+    private fun task(label: String, refreshAssets: Boolean = false, blockingOperation: Boolean = false, showProgress:Boolean=false, allowAgentWrite: Boolean = false, onSuccess: () -> Unit = {}, onFinished: () -> Unit = {}, onFailure: (Exception) -> Unit = {}, block: suspend () -> Unit) {
+        if(closed || (agentWriteLock && !allowAgentWrite)) return
         pending++; if(blockingOperation) blocking++; if(showProgress){progressing++;status=label}; error = null
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             var success = false
@@ -326,9 +343,17 @@ class DocumentController private constructor(
     }
 }
 
-class EditorApplicationModel(val scope: CoroutineScope, val preferences: EditorPreferences = EditorPreferences(), val store: WatchDocumentStore = WatchDocumentStore()) {
+class EditorApplicationModel(val scope: CoroutineScope, val preferences: EditorPreferences = EditorPreferences(), val store: WatchDocumentStore = WatchDocumentStore(), private val agentRoot: Path = appData().resolve("agent")) {
     val documents = mutableStateListOf<DocumentController>()
+    private val agentModels = mutableMapOf<String, DesktopAgentViewModel>()
+    internal fun agentModel(doc: DocumentController): DesktopAgentViewModel = agentModels.getOrPut(doc.session.id) { DesktopAgentViewModel(this, doc) }
     var canvasInput by mutableStateOf(preferences.canvasInput())
+    var agentSettings by mutableStateOf(preferences.agentSettings())
+        private set
+    /** These stores stay lazy so a disabled Agent never creates a backend or touches its files. */
+    val agentProviderStore: AgentProviderStore by lazy { AgentProviderStore(agentRoot) }
+    val agentConversationRepository: AgentConversationRepository by lazy { AgentConversationRepository(agentRoot) }
+    val agentWorkspaceManager: WorkspaceManager by lazy { WorkspaceManager(agentRoot.resolve("runtime")) }
     var recovery by mutableStateOf<List<RecoveryDraft>>(emptyList())
     var launcher by mutableStateOf(true)
     var launcherWindow: Window? = null
@@ -340,6 +365,15 @@ class EditorApplicationModel(val scope: CoroutineScope, val preferences: EditorP
     var error by mutableStateOf<String?>(null)
     var status by mutableStateOf<String?>(null)
     private val openMutex = Mutex()
+    private val agentSaveMutex = Mutex()
+    fun updateAgentSettings(value: AgentFeatureSettings) {
+        agentSettings = value
+        if (!value.enabled) {
+            agentModels.values.forEach(DesktopAgentViewModel::close); agentModels.clear()
+            documents.forEach { it.agentFullscreen = false; it.requestedInspectorTab = "属性" }
+        }
+        scope.launch { agentSaveMutex.withLock { runCatching { withContext(Dispatchers.IO) { preferences.saveAgentSettings(agentSettings) } } } }
+    }
     init { scope.launch { withContext(Dispatchers.IO) { listOf(preferences.recentProjects(),preferences.lastSession(),preferences.lastActive(),preferences.lastActiveDraftId()) }.let { values ->
         @Suppress("UNCHECKED_CAST") val recent = values[0] as List<RecentProject>
         @Suppress("UNCHECKED_CAST") val last = values[1] as List<Path>
@@ -464,8 +498,9 @@ class EditorApplicationModel(val scope: CoroutineScope, val preferences: EditorP
             refreshRecovery()
         }
     }
-    fun closed(doc: DocumentController) { documents.remove(doc); if (documents.isEmpty()) launcher = true; refreshRecovery() }
+    fun closed(doc: DocumentController) { agentModels.remove(doc.session.id)?.close(); documents.remove(doc); if (documents.isEmpty()) launcher = true; refreshRecovery() }
     fun reload(doc: DocumentController) = doc.reload(preferences) { replacement ->
+        agentModels.remove(doc.session.id)?.close()
         val index = documents.indexOf(doc)
         if(index >= 0) documents[index] = replacement
         refreshRecovery()

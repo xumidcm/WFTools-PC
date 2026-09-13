@@ -4,6 +4,7 @@ package com.ailife.wftools.pc
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -88,7 +89,7 @@ fun Rect.dropBounds() = DropBounds(left, top, right, bottom)
         val availableWidth = maxWidth.value
         val availableHeight = maxHeight.value
         val layout = editorLayout(availableWidth)
-        Column(Modifier.fillMaxSize()) {
+        if (!doc.agentFullscreen) Column(Modifier.fillMaxSize()) {
             Toolbar(doc,commands,theme,onTheme,app.canvasInput){app.canvasInput=it}
             HorizontalDivider()
             Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -98,17 +99,17 @@ fun Rect.dropBounds() = DropBounds(left, top, right, bottom)
                         Splitter(false,"left-panel-splitter") { onPanels(panels.copy(left = (panels.left + it).coerceIn(180f, 520f))) }
                         PreviewPanel(doc,commands,drops,app.canvasInput,Modifier.weight(1f).fillMaxHeight())
                         Splitter(false,"right-panel-splitter") { onPanels(panels.copy(right = (panels.right - it).coerceIn(240f, 560f))) }
-                        InspectorPanel(doc, drops, false, commands, Modifier.width(panels.right.dp).fillMaxHeight(), wideEditor = true)
+                        InspectorPanel(app, doc, drops, false, commands, Modifier.width(panels.right.dp).fillMaxHeight(), wideEditor = true, theme, onTheme)
                     }
                     EditorLayout.SIDE_INSPECTOR -> Row(Modifier.fillMaxSize()) {
                         PreviewPanel(doc,commands,drops,app.canvasInput,Modifier.weight(1f).fillMaxHeight())
                         Splitter(false,"right-panel-splitter") { onPanels(panels.copy(right = (panels.right - it).coerceIn(260f, 560f))) }
-                        InspectorPanel(doc, drops, true, commands, Modifier.width(panels.right.coerceIn(260f, 560f).dp).fillMaxHeight(), wideEditor = true)
+                        InspectorPanel(app, doc, drops, true, commands, Modifier.width(panels.right.coerceIn(260f, 560f).dp).fillMaxHeight(), wideEditor = true, theme, onTheme)
                     }
                     EditorLayout.STACKED -> Column(Modifier.fillMaxSize()) {
                         PreviewPanel(doc,commands,drops,app.canvasInput,Modifier.weight(1f).fillMaxWidth())
                         Splitter(true,"bottom-panel-splitter") { onPanels(panels.copy(bottom = (panels.bottom - it).coerceIn(160f, (availableHeight - 280f).coerceAtLeast(160f)))) }
-                        InspectorPanel(doc, drops, true, commands, Modifier.fillMaxWidth().height(panels.bottom.coerceIn(160f, (availableHeight - 280f).coerceAtLeast(160f)).dp), wideEditor = false)
+                        InspectorPanel(app, doc, drops, true, commands, Modifier.fillMaxWidth().height(panels.bottom.coerceIn(160f, (availableHeight - 280f).coerceAtLeast(160f)).dp), wideEditor = false, theme, onTheme)
                     }
                 }
             }
@@ -134,6 +135,9 @@ fun Rect.dropBounds() = DropBounds(left, top, right, bottom)
                 LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
                 Text(doc.status ?: "正在处理…", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+        }
+        if (doc.agentFullscreen && app.agentSettings.enabled) Surface(Modifier.fillMaxSize().testTag("agent-fullscreen"), color = MaterialTheme.colorScheme.surface) {
+            DesktopAgentPanel(app, doc, Modifier.fillMaxSize(), theme, onTheme)
         }
         drops.pendingWatch?.let { pending ->
             AlertDialog(
@@ -188,23 +192,18 @@ val layerTypes = listOf("image" to "图片", "image_gif" to "GIF 动画", "video
         .testTag(tag)
         .pointerHoverIcon(PointerIcon(Cursor(if(horizontal) Cursor.N_RESIZE_CURSOR else Cursor.E_RESIZE_CURSOR)))
         .pointerInput(horizontal) {
-            awaitEachGesture {
-                val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
-                var previousScreen=currentEvent.awtEventOrNull?.locationOnScreen
-                while(true) {
-                    val event=awaitPointerEvent(PointerEventPass.Initial)
-                    val change=event.changes.firstOrNull{it.id==down.id}?:break
-                    val screen=event.awtEventOrNull?.locationOnScreen
-                    val screenDelta=if(screen!=null&&previousScreen!=null)if(horizontal)screen.y-previousScreen!!.y else screen.x-previousScreen!!.x else 0
-                    val local=change.positionChange()
-                    val localDelta=if(horizontal)local.y else local.x
-                    val delta=if(kotlin.math.abs(screenDelta.toFloat())>kotlin.math.abs(localDelta))screenDelta.toFloat() else localDelta
-                    if(delta!=0f)current(delta/density)
-                    previousScreen=screen
-                    if(!change.pressed)break
+            // Use Compose's drag stream instead of sampling AWT screen
+            // coordinates.  Screen events are occasionally absent on desktop
+            // (and become stale while the Row is remeasured), which made the
+            // splitter stop following the pointer.  dragAmount is local px and
+            // remains correct when the surrounding layout changes mid-drag.
+            detectDragGestures(
+                onDrag = { change, dragAmount ->
+                    val delta = if (horizontal) dragAmount.y else dragAmount.x
+                    if (delta != 0f) current(delta / density)
                     change.consume()
-                }
-            }
+                },
+            )
         },contentAlignment=Alignment.Center) {
         Box(if(horizontal)Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant)
             else Modifier.fillMaxHeight().width(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
@@ -217,13 +216,13 @@ val layerTypes = listOf("image" to "图片", "image_gif" to "GIF 动画", "video
         if (tab == 0) LayerBrowser(doc, commands, Modifier.weight(1f),showAdd = true,drops = drops) else AssetsPanel(doc, drops, Modifier.weight(1f))
     }
 }
-@Composable private fun InspectorPanel(doc: DocumentController, drops: DropRegistry, all: Boolean, commands: CommandDispatcher, modifier: Modifier, wideEditor: Boolean) {
+@Composable private fun InspectorPanel(app: EditorApplicationModel, doc: DocumentController, drops: DropRegistry, all: Boolean, commands: CommandDispatcher, modifier: Modifier, wideEditor: Boolean, theme: ThemePreference, onTheme: (ThemePreference) -> Unit) {
     var tab by remember(all) { mutableStateOf(if(all) 0 else 0) }
-    val tabs = if(all) listOf("图层", "素材", "属性", "预览", "项目") else listOf("属性", "预览", "项目")
+    val tabs = (if(all) listOf("图层", "素材", "属性", "预览", "项目") else listOf("属性", "预览", "项目")) + if (app.agentSettings.enabled) listOf("AI") else emptyList()
     LaunchedEffect(doc.requestedInspectorTab) { doc.requestedInspectorTab?.let { requested -> tabs.indexOf(requested).takeIf { it >= 0 }?.let { tab = it; doc.requestedInspectorTab = null } } }
     Column(modifier) {
-        CompactTabs(tabs, tab) { tab = it }
-        when(tabs[tab]) { "图层" -> LayersPanel(doc, commands, Modifier.weight(1f),drops); "素材" -> AssetsPanel(doc, drops, Modifier.weight(1f)); "属性" -> PropertiesPanel(doc, drops, Modifier.weight(1f), wideEditor); "预览" -> PreviewSettingsPanel(doc, Modifier.weight(1f)); "项目" -> ProjectPanel(doc, Modifier.weight(1f)) }
+        CompactTabs(tabs, tab.coerceIn(0, tabs.lastIndex)) { selected -> tab = selected; if (!wideEditor && tabs[selected] == "AI") doc.agentFullscreen = true }
+        when(tabs.getOrElse(tab) { "属性" }) { "图层" -> LayersPanel(doc, commands, Modifier.weight(1f),drops); "素材" -> AssetsPanel(doc, drops, Modifier.weight(1f)); "属性" -> PropertiesPanel(doc, drops, Modifier.weight(1f), wideEditor); "预览" -> PreviewSettingsPanel(doc, Modifier.weight(1f)); "项目" -> ProjectPanel(doc, Modifier.weight(1f)); "AI" -> DesktopAgentPanel(app, doc, Modifier.weight(1f), theme, onTheme) }
     }
 }
 @Composable private fun CompactTabs(tabs: List<String>, selected: Int, onSelect: (Int) -> Unit) {
@@ -233,7 +232,7 @@ val layerTypes = listOf("image" to "图片", "image_gif" to "GIF 动画", "video
         divider = { HorizontalDivider(thickness = .5.dp,color = MaterialTheme.colorScheme.outlineVariant) }) {
         tabs.forEachIndexed { index,title -> Tab(selected == index,{ focus.clearFocus(); onSelect(index) },modifier = Modifier.height(42.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically,horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Icon(when(title) { "图层" -> Icons.Default.Layers; "素材" -> Icons.Default.PhotoLibrary; "属性" -> Icons.Default.Tune; "预览" -> Icons.Default.Visibility; else -> Icons.Default.Watch },null,Modifier.size(15.dp))
+                Icon(when(title) { "图层" -> Icons.Default.Layers; "素材" -> Icons.Default.PhotoLibrary; "属性" -> Icons.Default.Tune; "预览" -> Icons.Default.Visibility; "AI" -> Icons.Default.AutoAwesome; else -> Icons.Default.Watch },null,Modifier.size(15.dp))
                 Text(title,fontSize = 12.sp,maxLines = 1)
             }
         } }

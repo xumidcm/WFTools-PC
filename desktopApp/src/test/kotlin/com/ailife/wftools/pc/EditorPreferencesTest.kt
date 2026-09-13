@@ -9,6 +9,14 @@ import java.nio.file.Files
 
 class EditorPreferencesTest {
     @get:Rule val temp = TemporaryFolder()
+    @Test fun `agent defaults off and persists independently of normal preferences`() {
+        val dir = temp.newFolder().toPath(); val preferences = EditorPreferences(dir)
+        assertFalse(preferences.agentSettings().enabled)
+        preferences.saveAgentSettings(preferences.agentSettings().copy(enabled = true, defaultModelId = "vers-1"))
+        preferences.saveApplication(ThemePreference.DARK, PanelPreferences(), WindowPreferences())
+        val restored = EditorPreferences(dir).agentSettings()
+        assertTrue(restored.enabled); assertEquals("vers-1", restored.defaultModelId)
+    }
     @Test fun `per-file viewport workspace and simulation survive restart without sharing between files`() {
         val dir = temp.newFolder().toPath(); val preferences = EditorPreferences(dir)
         val value = PreviewPreferences(DevicePreviewSettings(320,386,ScreenShape.ROUND,CanvasPreset.STRETCH,1.5,.7,20.0,-15.0), WorkspaceViewState(false,2.0,45.0,30.0), mapOf("steps" to "1234", "weatherLocation" to "北京"),snapping = false,operationMode = CanvasOperationMode.SELECT_THEN_DRAG)

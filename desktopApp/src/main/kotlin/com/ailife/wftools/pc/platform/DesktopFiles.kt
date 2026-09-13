@@ -43,6 +43,7 @@ private fun chooseOpenWithNativeDialog(owner: Component?, title: String, extensi
 fun chooseWatchFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, DesktopI18n.text("打开 WatchMaker 表盘"), "watch")
 fun chooseAssets(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, DesktopI18n.text("导入图片、视频或字体"), "png,jpg,jpeg,gif,webp,bmp,mp4,webm,mov,m4v,avi,mkv,ttf,otf,fnt")
 fun chooseAudioFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, DesktopI18n.text("添加音频资源"), "mp3,wav,ogg,m4a,aac,flac")
+fun chooseAgentImages(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, "添加 Agent 图片", "png,jpg,jpeg,gif,webp,bmp")
 fun chooseSavePath(owner: Component?, source: Path?, title: String, allowExisting: Boolean = true): Path? {
     val dialog = nativeFileDialog(owner, DesktopI18n.text("保存 WatchMaker 表盘"), FileDialog.SAVE).apply {
         filenameFilter = FilenameFilter { _, name -> name.endsWith(".watch", true) }

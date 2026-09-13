@@ -1,5 +1,7 @@
 package com.ailife.wftools.pc
 
+import com.ailife.wftools.agent.model.AgentFeatureSettings
+import com.ailife.wftools.agent.model.AgentBashMode
 import com.ailife.wftools.pc.platform.appData
 import com.ailife.wftools.pc.preview.*
 import java.nio.file.Files
@@ -93,14 +95,47 @@ class EditorPreferences(private val directory: Path = appData().resolve("prefere
         showTransformHandles=p.getProperty("canvasTransformHandles")?.toBooleanStrictOrNull() ?: true,
         showOperationStatus=p.getProperty("canvasOperationStatus")?.toBooleanStrictOrNull() ?: true,
     ) }
+    fun agentSettings(): AgentFeatureSettings = read("application.properties").let { p ->
+        AgentFeatureSettings(
+            enabled = p.getProperty("agent.enabled")?.toBooleanStrictOrNull() ?: false,
+            activeProviderId = p.getProperty("agent.provider")?.takeIf(String::isNotBlank),
+            defaultModelId = p.getProperty("agent.model")?.takeIf(String::isNotBlank),
+            workspaceId = p.getProperty("agent.workspace")?.takeIf(String::isNotBlank),
+            contextWindowOverride = p.getProperty("agent.contextWindow")?.toLongOrNull()?.takeIf { it > 0L },
+            bashMode = runCatching { AgentBashMode.valueOf(p.getProperty("agent.bashMode", "ASK")) }.getOrDefault(AgentBashMode.ASK),
+            readAllowed = p.getProperty("agent.readAllowed")?.toBooleanStrictOrNull() ?: true,
+            writeAllowed = p.getProperty("agent.writeAllowed")?.toBooleanStrictOrNull() ?: true,
+            attachmentImportAllowed = p.getProperty("agent.attachmentAllowed")?.toBooleanStrictOrNull() ?: true,
+            imageGenerationEndpoint = p.getProperty("agent.imageEndpoint")?.takeIf(String::isNotBlank),
+            imageModelId = p.getProperty("agent.imageModel")?.takeIf(String::isNotBlank),
+            searchEndpoint = p.getProperty("agent.searchEndpoint")?.takeIf(String::isNotBlank),
+        )
+    }
     @Synchronized fun saveApplication(theme: ThemePreference, panels: PanelPreferences, window: WindowPreferences) = saveApplication(theme,panels,window,canvasInput())
-    @Synchronized fun saveApplication(theme: ThemePreference, panels: PanelPreferences, window: WindowPreferences, canvasInput: CanvasInputPreferences) = write("application.properties", Properties().apply {
+    @Synchronized fun saveApplication(theme: ThemePreference, panels: PanelPreferences, window: WindowPreferences, canvasInput: CanvasInputPreferences) = write("application.properties", read("application.properties").apply {
         setProperty("theme", theme.name); setProperty("left", panels.left.toString()); setProperty("right", panels.right.toString()); setProperty("bottom", panels.bottom.toString())
         setProperty("width", window.width.toString()); setProperty("height", window.height.toString())
         setProperty("language", DesktopI18n.language().name)
         setProperty("middleButtonPan",canvasInput.middleButtonPan.toString());setProperty("rightButtonPan",canvasInput.rightButtonPan.toString());setProperty("wheelScalesSelectedLayer",canvasInput.wheelScalesSelectedLayer.toString())
         setProperty("canvasSnapping",canvasInput.snapping.toString());setProperty("canvasTransformHandles",canvasInput.showTransformHandles.toString());setProperty("canvasOperationStatus",canvasInput.showOperationStatus.toString())
     })
+    @Synchronized fun saveAgentSettings(value: AgentFeatureSettings) {
+        val current = read("application.properties")
+        fun optional(name: String, raw: String?) { if (raw == null) current.remove(name) else current.setProperty(name, raw) }
+        current.setProperty("agent.enabled", value.enabled.toString())
+        optional("agent.provider", value.activeProviderId)
+        optional("agent.model", value.defaultModelId)
+        optional("agent.workspace", value.workspaceId)
+        optional("agent.contextWindow", value.contextWindowOverride?.toString())
+        current.setProperty("agent.bashMode", value.bashMode.name)
+        current.setProperty("agent.readAllowed", value.readAllowed.toString())
+        current.setProperty("agent.writeAllowed", value.writeAllowed.toString())
+        current.setProperty("agent.attachmentAllowed", value.attachmentImportAllowed.toString())
+        optional("agent.imageEndpoint", value.imageGenerationEndpoint)
+        optional("agent.imageModel", value.imageModelId)
+        optional("agent.searchEndpoint", value.searchEndpoint)
+        write("application.properties", current)
+    }
     fun preview(identity: String): PreviewPreferences {
         val p = read(key(identity))
         return PreviewPreferences(DevicePreviewSettings(p.int("width", 480, 64, 2048), p.int("height", 480, 64, 2048),

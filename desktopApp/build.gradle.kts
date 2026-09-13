@@ -9,6 +9,7 @@ kotlin { jvmToolchain(21) }
 dependencies {
     implementation(project(":watch-core"))
     implementation(project(":watch-renderer"))
+    implementation(project(":agent-core"))
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)

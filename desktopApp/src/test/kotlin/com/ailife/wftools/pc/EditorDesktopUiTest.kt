@@ -13,6 +13,9 @@ import androidx.compose.ui.unit.dp
 import com.ailife.wftools.pc.core.WatchDocumentStore
 import com.ailife.wftools.pc.preview.PreviewDocumentSnapshot
 import com.ailife.wftools.pc.preview.WatchPreview
+import com.ailife.wftools.agent.model.AiProtocol
+import com.ailife.wftools.agent.model.AiProviderProfile
+import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.*
 import org.junit.After
 import org.junit.Assert.*
@@ -20,14 +23,16 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.net.InetSocketAddress
 
 class EditorDesktopUiTest {
     @get:Rule val compose = createComposeRule()
     @get:Rule val temp = TemporaryFolder()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var doc: DocumentController? = null
+    private var agentServer: HttpServer? = null
     @Before fun useChineseFixtureLocale() { DesktopI18n.setLanguage(DesktopLanguage.CHINESE) }
-    @After fun close() { doc?.let { it.render.close(); it.session.close() }; scope.cancel() }
+    @After fun close() { agentServer?.stop(0); doc?.let { it.render.close(); it.session.close() }; scope.cancel() }
     private fun editor(saved: Boolean = false): DocumentController = runBlocking {
         val store = WatchDocumentStore(temp.newFolder("work").toPath())
         val session = store.newDocument()
@@ -213,6 +218,53 @@ class EditorDesktopUiTest {
         inline.performKeyInput { pressKey(Key.Enter) }
         compose.waitUntil(5000){!editor.busy&&editor.view.layers.last().attrs["text"]=="第一行\n第二行"}
         compose.onNodeWithTag("inline-text-editor").assertDoesNotExist()
+    }
+    @Test fun `AI inspector tab is absent until global switch is enabled`() {
+        val editor = editor()
+        val app = EditorApplicationModel(scope, EditorPreferences(temp.newFolder("agent-preferences").toPath()), agentRoot = temp.newFolder("agent-data").toPath())
+        val commands = CommandDispatcher(app, editor) {}
+        compose.setContent { WFToolsTheme(false) { EditorWorkspace(app, editor, commands, PanelPreferences(), {}, DropRegistry()) } }
+        compose.onNodeWithText("AI", useUnmergedTree = true).assertDoesNotExist()
+        compose.runOnIdle { app.updateAgentSettings(app.agentSettings.copy(enabled = true)) }
+        compose.onNodeWithText("AI", useUnmergedTree = true).assertExists()
+        compose.runOnIdle { app.updateAgentSettings(app.agentSettings.copy(enabled = false)) }
+        compose.onNodeWithText("AI", useUnmergedTree = true).assertDoesNotExist()
+    }
+    @Test fun `AI sidebar streams a reply and keeps history across maximize`() {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/v1/chat/completions") { exchange ->
+            val request = exchange.requestBody.readAllBytes().toString(Charsets.UTF_8)
+            val streaming = request.contains("\"stream\":true")
+            val body = (if (streaming) "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n" else "{\"choices\":[{\"message\":{\"content\":\"表盘编辑请求\"}}]}").toByteArray()
+            exchange.responseHeaders.set("Content-Type", if (streaming) "text/event-stream" else "application/json")
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        server.start(); agentServer = server
+        val editor = editor()
+        val app = EditorApplicationModel(scope, EditorPreferences(temp.newFolder("agent-ui-preferences").toPath()), agentRoot = temp.newFolder("agent-ui-data").toPath())
+        app.agentProviderStore.save(AiProviderProfile("fake", "Fake", AiProtocol.CHAT_COMPLETIONS, "http://127.0.0.1:${server.address.port}/v1", modelId = "fake-model"), "")
+        app.updateAgentSettings(app.agentSettings.copy(enabled = true, activeProviderId = "fake", defaultModelId = "fake-model"))
+        val commands = CommandDispatcher(app, editor) {}
+        compose.setContent { WFToolsTheme(false) { EditorWorkspace(app, editor, commands, PanelPreferences(), {}, DropRegistry()) } }
+        compose.onNodeWithText("AI", useUnmergedTree = true).performClick()
+        compose.waitUntil(10000) { app.agentModel(editor).activeConversation != null }
+        val input = compose.onNodeWithTag("agent-input")
+        input.performClick()
+        input.performTextInput("Hello")
+        input.performKeyInput { keyDown(Key.ShiftLeft); pressKey(Key.Enter); keyUp(Key.ShiftLeft) }
+        input.performTextInput("detail")
+        input.performKeyInput { pressKey(Key.Enter) }
+        compose.waitUntil(15000) { app.agentModel(editor).messages.any { it.content == "OK" } }
+        compose.waitUntil(15000) { app.agentModel(editor).activeConversation?.title == "表盘编辑请求" }
+        compose.onNodeWithTag("agent-input-resize").assertIsDisplayed()
+        compose.onAllNodesWithContentDescription("复制消息", useUnmergedTree = true).assertCountEquals(2)
+        compose.onNodeWithContentDescription("最大化").performClick()
+        compose.onNodeWithTag("agent-fullscreen").assertExists()
+        compose.onNodeWithContentDescription("恢复").performClick()
+        compose.onNodeWithTag("agent-fullscreen").assertDoesNotExist()
+        compose.onNodeWithContentDescription("历史").performClick()
+        compose.onAllNodesWithText("表盘编辑请求", useUnmergedTree = true).assertCountEquals(2)
     }
 
 }

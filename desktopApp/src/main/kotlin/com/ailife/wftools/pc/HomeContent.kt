@@ -22,11 +22,19 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import com.ailife.wftools.pc.platform.desktopPlatformLabel
 import com.ailife.wftools.pc.platform.openExternalUrl
 import com.ailife.wftools.pc.platform.watchFileAssociation
+import com.ailife.wftools.agent.model.AiProviderProfile
+import com.ailife.wftools.agent.model.AiProtocol
+import com.ailife.wftools.agent.model.AgentBashMode
+import com.ailife.wftools.agent.provider.AgentProviderClient
+import com.ailife.wftools.agent.workspace.AgentWorkspace
+import com.ailife.wftools.agent.workspace.WorkspaceManager
+import com.ailife.wftools.agent.workspace.DesktopShellRunner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -106,7 +114,7 @@ internal fun performFileAssociationAction(
             }
         }
     }
-    if(settings) HomeSettingsDialog(theme,onTheme,app.canvasInput,{app.canvasInput=it},onDismiss={settings=false})
+    if(settings) HomeSettingsDialog(app,theme,onTheme,app.canvasInput,{app.canvasInput=it},onDismiss={settings=false})
 }
 
 @Composable private fun RecentProjectRow(app:EditorApplicationModel,recent:RecentProject) {
@@ -132,7 +140,7 @@ internal fun performFileAssociationAction(
     if(deleteConfirm) AlertDialog(onDismissRequest={deleteConfirm=false},title={Text("删除表盘？")},text={Text(if(recent.draftId!=null)"这会删除未保存草稿，且无法从最近编辑恢复。" else "这会直接删除原始 .watch 文件，操作不可撤销：\n${recent.path}")},confirmButton={TextButton(onClick={deleteConfirm=false;app.deleteRecentWatch(recent)}){Text("删除")}},dismissButton={TextButton(onClick={deleteConfirm=false}){Text("取消")}})
 }
 
-@Composable private fun HomeSettingsDialog(currentTheme:ThemePreference,onTheme:(ThemePreference)->Unit,canvasInput:CanvasInputPreferences,onCanvasInput:(CanvasInputPreferences)->Unit,onDismiss:()->Unit) {
+@Composable internal fun HomeSettingsDialog(app: EditorApplicationModel,currentTheme:ThemePreference,onTheme:(ThemePreference)->Unit,canvasInput:CanvasInputPreferences,onCanvasInput:(CanvasInputPreferences)->Unit,onDismiss:()->Unit, initialPage: Int = 0) {
     val theme = when(currentTheme){ThemePreference.SYSTEM->"跟随系统";ThemePreference.LIGHT->"浅色";ThemePreference.DARK->"深色"}
     val association=remember{watchFileAssociation()}
     val scope=rememberCoroutineScope()
@@ -140,8 +148,196 @@ internal fun performFileAssociationAction(
     var associationLoaded by remember{mutableStateOf(false)}
     var associationBusy by remember{mutableStateOf(false)}
     var associationError by remember{mutableStateOf<String?>(null)}
+    var page by remember { mutableIntStateOf(initialPage.coerceIn(0, 1)) }
+    var agent by remember { mutableStateOf(app.agentSettings) }
+    var endpoint by remember { mutableStateOf("") }
+    var providerId by remember { mutableStateOf(java.util.UUID.randomUUID().toString()) }
+    var providerName by remember { mutableStateOf("") }
+    var protocol by remember { mutableStateOf(AiProtocol.CHAT_COMPLETIONS) }
+    var apiKey by remember { mutableStateOf("") }
+    var headerName by remember { mutableStateOf("") }
+    var headerValue by remember { mutableStateOf("") }
+    var contextWindow by remember { mutableStateOf("") }
+    var providerMenu by remember { mutableStateOf(false) }
+    var modelMenu by remember { mutableStateOf(false) }
+    var profiles by remember { mutableStateOf<List<AiProviderProfile>>(emptyList()) }
+    var workspaces by remember { mutableStateOf<List<AgentWorkspace>>(emptyList()) }
+    var workspaceName by remember { mutableStateOf("") }
+    var workspaceQuotaMiB by remember { mutableStateOf("1024") }
+    var imageEndpoint by remember { mutableStateOf(app.agentSettings.imageGenerationEndpoint.orEmpty()) }
+    var imageModel by remember { mutableStateOf(app.agentSettings.imageModelId.orEmpty()) }
+    var imageKey by remember { mutableStateOf("") }
+    var searchEndpoint by remember { mutableStateOf(app.agentSettings.searchEndpoint.orEmpty()) }
+    var searchKey by remember { mutableStateOf("") }
+    var diagnostics by remember { mutableStateOf("") }
+    val settingsScroll = rememberScrollState()
+    LaunchedEffect(page) { settingsScroll.scrollTo(0) }
+    var model by remember { mutableStateOf("") }
+    var models by remember { mutableStateOf<List<String>>(emptyList()) }
+    var providerBusy by remember { mutableStateOf(false) }
+    var providerMessage by remember { mutableStateOf<String?>(null) }
+    fun pullModels() {
+        if (providerBusy) return
+        providerBusy = true; providerMessage = null
+        scope.launch {
+            try {
+                val old = profiles.firstOrNull { it.id == providerId }
+                val profile = (old ?: AiProviderProfile(providerId, providerName.ifBlank { "自定义 Provider" }, protocol, endpoint.trim())).copy(
+                    name = providerName.ifBlank { "自定义 Provider" }, protocol = protocol, baseUrl = endpoint.trim(),
+                    modelId = model.takeIf(String::isNotBlank), contextWindowOverride = contextWindow.toLongOrNull(),
+                )
+                val found = withContext(Dispatchers.IO) { AgentProviderClient().listModels(profile, apiKey, if (headerName.isNotBlank()) mapOf(headerName.trim() to headerValue) else emptyMap()) }
+                models = found.map { it.id }
+                model = model.takeIf { it in models } ?: models.firstOrNull().orEmpty()
+                providerMessage = "已拉取 ${models.size} 个模型；可在右侧下拉框选择。"
+            } catch (failure: Throwable) { providerMessage = failure.message ?: "模型列表拉取失败" }
+            finally { providerBusy = false }
+        }
+    }
     LaunchedEffect(association){associated=withContext(Dispatchers.IO){runCatching{association.isAssociated()}.getOrDefault(false)};associationLoaded=true}
-    AlertDialog(onDismissRequest=onDismiss,title={Text("设置")},text={Column(Modifier.widthIn(min=420.dp,max=620.dp).heightIn(max=560.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+    LaunchedEffect(agent.enabled) {
+        if (agent.enabled) {
+            profiles = app.agentProviderStore.profiles()
+            val profile = app.agentProviderStore.active(agent.activeProviderId)
+            providerId = profile?.id ?: providerId
+            providerName = profile?.name.orEmpty()
+            protocol = profile?.protocol ?: AiProtocol.CHAT_COMPLETIONS
+            endpoint = profile?.baseUrl.orEmpty()
+            model = profile?.modelId ?: agent.defaultModelId.orEmpty()
+            apiKey = profile?.let { app.agentProviderStore.apiKey(it.id) }.orEmpty()
+            val headers = profile?.let { app.agentProviderStore.headers(it.id) }.orEmpty()
+            headerName = headers.keys.firstOrNull().orEmpty(); headerValue = headers.values.firstOrNull().orEmpty()
+            contextWindow = profile?.contextWindowOverride?.toString().orEmpty()
+            workspaces = app.agentWorkspaceManager.list()
+            imageKey = app.agentProviderStore.imageApiKey().orEmpty()
+            searchKey = app.agentProviderStore.searchApiKey().orEmpty()
+            diagnostics = withContext(Dispatchers.IO) { desktopRuntimeDiagnostics(app.agentWorkspaceManager, workspaces.firstOrNull()?.id) }
+        }
+    }
+    AlertDialog(onDismissRequest=onDismiss,title={
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("设置", style = MaterialTheme.typography.titleMedium)
+            TabRow(selectedTabIndex = page, modifier = Modifier.fillMaxWidth().height(38.dp), containerColor = Color.Transparent, divider = {}) {
+                listOf("常规", "Agent").forEachIndexed { index, label ->
+                    Tab(selected = page == index, onClick = { page = index }, modifier = Modifier.height(38.dp)) { Text(label, style = MaterialTheme.typography.labelMedium) }
+                }
+            }
+        }
+    },text={Column(Modifier.widthIn(min=420.dp,max=620.dp).heightIn(max=560.dp).verticalScroll(settingsScroll),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+      if (page == 1) {
+        Text("表盘 Agent",style=MaterialTheme.typography.titleSmall)
+        Row(Modifier.fillMaxWidth().testTag("agent-enabled-toggle").clickable {
+            val next = !agent.enabled
+            agent = agent.copy(enabled = next)
+            app.updateAgentSettings(agent)
+        }.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f)) { Text("启用右侧 AI 页面", fontWeight = FontWeight.SemiBold); Text("关闭时不会显示 AI 页，也不会启动 Agent 后台。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Switch(agent.enabled, onCheckedChange = null)
+        }
+        if (agent.enabled) {
+            HorizontalDivider()
+            Text("Provider 与模型",style=MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box {
+                    OutlinedButton(onClick = { providerMenu = true }) { Text(providerName.ifBlank { "选择 Provider" }) }
+                    DropdownMenu(providerMenu, { providerMenu = false }) {
+                        profiles.forEach { profile -> DropdownMenuItem(text = { Text(profile.name) }, onClick = {
+                            providerMenu = false; providerId = profile.id; providerName = profile.name; protocol = profile.protocol
+                            endpoint = profile.baseUrl; model = profile.modelId.orEmpty(); contextWindow = profile.contextWindowOverride?.toString().orEmpty()
+                            apiKey = app.agentProviderStore.apiKey(profile.id).orEmpty()
+                            val headers = app.agentProviderStore.headers(profile.id)
+                            headerName = headers.keys.firstOrNull().orEmpty(); headerValue = headers.values.firstOrNull().orEmpty()
+                        }) }
+                    }
+                }
+                OutlinedButton(onClick = { providerId = java.util.UUID.randomUUID().toString(); providerName = ""; endpoint = ""; model = ""; apiKey = ""; headerName = ""; headerValue = ""; contextWindow = "" }) { Text("新增") }
+            }
+            OutlinedTextField(providerName, { providerName = it }, Modifier.fillMaxWidth(), label = { Text("Provider 名称") }, singleLine = true)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                AiProtocol.entries.forEach { option -> FilterChip(selected = protocol == option, onClick = { protocol = option }, label = { Text(when(option) { AiProtocol.CHAT_COMPLETIONS -> "Chat"; AiProtocol.RESPONSES -> "Responses"; AiProtocol.CLAUDE_MESSAGES -> "Claude" }) }) }
+            }
+            OutlinedTextField(endpoint,{ endpoint=it },Modifier.fillMaxWidth().testTag("agent-provider-endpoint"),label={Text("接口地址")},singleLine=true)
+            OutlinedTextField(apiKey,{ apiKey=it },Modifier.fillMaxWidth(),label={Text("API Key · 可留空")},singleLine=true,visualTransformation=PasswordVisualTransformation())
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(headerName, { headerName = it }, Modifier.weight(1f), label = { Text("自定义 Header") }, singleLine = true)
+                OutlinedTextField(headerValue, { headerValue = it }, Modifier.weight(1f), label = { Text("Header 值") }, singleLine = true)
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(model,{ model=it },Modifier.weight(1f).testTag("agent-model-id"),label={Text("模型 ID（可手填）")},singleLine=true)
+                Box {
+                    IconButton(onClick = { pullModels(); modelMenu = true }, enabled = !providerBusy) { Icon(Icons.Default.Refresh, "拉取 models") }
+                    DropdownMenu(modelMenu, { modelMenu = false }) {
+                        if (models.isEmpty()) DropdownMenuItem(text = { Text(if (providerBusy) "正在拉取…" else "暂无模型") }, enabled = false, onClick = {})
+                        models.forEach { id -> DropdownMenuItem(text = { Text(id) }, onClick = { model = id; modelMenu = false }) }
+                    }
+                }
+            }
+            OutlinedTextField(contextWindow, { contextWindow = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), label = { Text("上下文窗口 Token · 200K 默认值") }, singleLine = true)
+            Row(horizontalArrangement=Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(enabled=!providerBusy,onClick={
+                    providerBusy=true; providerMessage=null
+                    scope.launch {
+                        try {
+                            val old = profiles.firstOrNull { it.id == providerId }
+                            val profile = (old ?: AiProviderProfile(providerId,providerName.ifBlank { "自定义 Provider" },protocol,endpoint)).copy(name=providerName.ifBlank { "自定义 Provider" },protocol=protocol,baseUrl=endpoint.trim(),modelId=model.takeIf(String::isNotBlank),contextWindowOverride=contextWindow.toLongOrNull())
+                            val headers = if (headerName.isNotBlank()) mapOf(headerName.trim() to headerValue) else emptyMap()
+                            val found = withContext(Dispatchers.IO) { AgentProviderClient().listModels(profile, apiKey, headers) }
+                            models = found.map { it.id }
+                            val selected = model.takeIf { it in models } ?: models.firstOrNull().orEmpty()
+                            model = selected
+                            if (selected.isBlank()) throw IllegalStateException("Provider 没有可用模型")
+                            withContext(Dispatchers.IO) {
+                                AgentProviderClient().send(profile.copy(modelId=selected), apiKey, com.ailife.wftools.agent.provider.AgentProviderRequest(listOf(com.ailife.wftools.agent.provider.AgentRequestMessage(com.ailife.wftools.agent.model.AgentMessageRole.USER, "Reply OK")), stream = false), headers)
+                            }
+                            app.agentProviderStore.save(profile.copy(modelId=selected), apiKey)
+                            app.agentProviderStore.saveHeaders(profile.id, headers)
+                            profiles = app.agentProviderStore.profiles()
+                            agent = agent.copy(activeProviderId=profile.id, defaultModelId=selected, contextWindowOverride=contextWindow.toLongOrNull())
+                            app.updateAgentSettings(agent)
+                            providerMessage = "连接测试成功，已发现 ${models.size} 个模型；视觉和工具调用能力以模型实际响应为准。"
+                        } catch (error: Exception) { providerMessage = error.message ?: "Provider 连接失败" }
+                        finally { providerBusy=false }
+                    }
+                }) { Text(if(providerBusy) "连接中…" else "连接并拉取模型") }
+                if (models.isNotEmpty()) Text("可选：${models.take(3).joinToString(", ")}", style=MaterialTheme.typography.bodySmall)
+            }
+            providerMessage?.let { Text(it, style=MaterialTheme.typography.bodySmall, color=if(it.contains("失败")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
+            Text("上下文窗口未知时使用 200K 默认值；可在 Provider 配置中手工覆盖。", style=MaterialTheme.typography.bodySmall, color=MaterialTheme.colorScheme.onSurfaceVariant)
+            HorizontalDivider()
+            Text("图片与搜索",style=MaterialTheme.typography.titleSmall)
+            OutlinedTextField(imageEndpoint, { imageEndpoint = it; agent = agent.copy(imageGenerationEndpoint = it.takeIf(String::isNotBlank)); app.updateAgentSettings(agent) }, Modifier.fillMaxWidth(), label = { Text("图片生成接口 · 可选") }, singleLine = true)
+            OutlinedTextField(imageModel, { imageModel = it; agent = agent.copy(imageModelId = it.takeIf(String::isNotBlank)); app.updateAgentSettings(agent) }, Modifier.fillMaxWidth(), label = { Text("图片模型 ID · 可选") }, singleLine = true)
+            OutlinedTextField(imageKey, { imageKey = it }, Modifier.fillMaxWidth(), label = { Text("图片接口 API Key · 可留空") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
+            OutlinedTextField(searchEndpoint, { searchEndpoint = it; agent = agent.copy(searchEndpoint = it.takeIf(String::isNotBlank)); app.updateAgentSettings(agent) }, Modifier.fillMaxWidth(), label = { Text("搜索接口 · 可选") }, singleLine = true)
+            OutlinedTextField(searchKey, { searchKey = it }, Modifier.fillMaxWidth(), label = { Text("搜索接口 API Key · 可留空") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
+            OutlinedButton(onClick = { app.agentProviderStore.saveImageApiKey(imageKey); app.agentProviderStore.saveSearchApiKey(searchKey); providerMessage = "外部接口凭据已加密保存。" }) { Text("保存外部接口凭据") }
+            Text("图片附件和本机预览可直接使用；外部图片生成与搜索需配置兼容接口。", style=MaterialTheme.typography.bodySmall, color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("工作区",style=MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(workspaceName, { workspaceName = it }, Modifier.weight(1f), label = { Text("新建工作区名称") }, singleLine = true)
+                OutlinedTextField(workspaceQuotaMiB, { workspaceQuotaMiB = it.filter(Char::isDigit) }, Modifier.width(100.dp), label = { Text("配额 MiB") }, singleLine = true)
+                OutlinedButton(enabled = workspaceName.isNotBlank() && workspaceQuotaMiB.toLongOrNull()?.let { it in 1L..102400L } == true, onClick = {
+                    runCatching { app.agentWorkspaceManager.create(workspaceName.trim(), workspaceQuotaMiB.toLong() * 1024L * 1024L) }.onSuccess { created ->
+                        workspaces = app.agentWorkspaceManager.list(); workspaceName = ""
+                        agent = agent.copy(workspaceId = created.id); app.updateAgentSettings(agent)
+                    }.onFailure { providerMessage = it.message }
+                }, modifier = Modifier.align(Alignment.CenterVertically)) { Text("创建") }
+            }
+            workspaces.forEach { workspace -> FilterChip(selected = agent.workspaceId == workspace.id, onClick = { agent = agent.copy(workspaceId = workspace.id); app.updateAgentSettings(agent) }, label = { Text("${workspace.displayName} · ${workspace.quota.usedBytes / 1024 / 1024}/${workspace.quota.limitBytes / 1024 / 1024} MiB") }) }
+            Text("每个表盘绑定一个隔离工作区；未选时首次进入 AI 页自动创建。", style=MaterialTheme.typography.bodySmall, color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("命令与权限",style=MaterialTheme.typography.titleSmall)
+            HomeCanvasInputSwitch("允许读取当前表盘", agent.readAllowed, "agent-read-toggle") { agent = agent.copy(readAllowed = it); app.updateAgentSettings(agent) }
+            HomeCanvasInputSwitch("允许修改当前表盘", agent.writeAllowed, "agent-write-toggle") { agent = agent.copy(writeAllowed = it); app.updateAgentSettings(agent) }
+            HomeCanvasInputSwitch("允许导入图片附件", agent.attachmentImportAllowed, "agent-attachment-toggle") { agent = agent.copy(attachmentImportAllowed = it); app.updateAgentSettings(agent) }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                AgentBashMode.entries.forEach { mode -> FilterChip(selected = agent.bashMode == mode, onClick = { agent = agent.copy(bashMode = mode); app.updateAgentSettings(agent) }, label = { Text(when(mode) { AgentBashMode.ASK -> "每次询问"; AgentBashMode.ALLOW -> "自动允许"; AgentBashMode.DENY -> "禁用" }) }) }
+            }
+            Text("Windows 使用 PowerShell，Linux 使用 Bash，工作目录为绑定工作区。原生命令仍可访问本机其他路径，请审查命令后再允许；停止生成会终止子进程。", style=MaterialTheme.typography.bodySmall, color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("数据与诊断",style=MaterialTheme.typography.titleSmall)
+            Text("会话历史按表盘隔离保存，API Key 使用本地加密文件保存。", style=MaterialTheme.typography.bodySmall, color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(diagnostics.ifBlank { "正在检测本机能力…" }, style=MaterialTheme.typography.bodySmall, color=MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+      } else {
         Text("外观",style=MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement=Arrangement.spacedBy(6.dp)){listOf("跟随系统","浅色","深色").forEach{value->FilterChip(selected=theme==value,onClick={onTheme(when(value){"浅色"->ThemePreference.LIGHT;"深色"->ThemePreference.DARK;else->ThemePreference.SYSTEM})},label={Text(value)})}}
         HorizontalDivider()
@@ -175,6 +371,7 @@ internal fun performFileAssociationAction(
             Icon(if(associated)Icons.Default.LinkOff else Icons.Default.Link,null,Modifier.size(17.dp));Spacer(Modifier.width(6.dp));Text(when{associationBusy->"正在修改…";!association.available->"仅安装版可修改关联";associated->"取消 .watch 关联";else->"关联 .watch 文件"})
         }
         associationError?.let{Text(it,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)}
+      }
     }},confirmButton={Button(onClick=onDismiss){Text("完成")}},dismissButton={TextButton(onClick=onDismiss){Text("取消")}})
 }
 
@@ -183,4 +380,20 @@ internal fun performFileAssociationAction(
         Text(label,Modifier.weight(1f))
         Switch(checked,onCheckedChange=null)
     }
+}
+
+private fun desktopRuntimeDiagnostics(manager: WorkspaceManager, workspaceId: String?): String {
+    fun available(vararg command: String): Boolean = runCatching {
+        val process = ProcessBuilder(*command).redirectErrorStream(true).start()
+        if (!process.waitFor(4, java.util.concurrent.TimeUnit.SECONDS)) { process.destroyForcibly(); false }
+        else process.exitValue() == 0
+    }.getOrDefault(false)
+    val windows = System.getProperty("os.name").contains("Windows", ignoreCase = true)
+    val shell = if (windows) available("pwsh", "-Version") || available("powershell", "-Version") else available("bash", "--version")
+    val python = if (windows) "python" else "python3"
+    val pythonPresent = available(python, "--version")
+    val pillow = pythonPresent && available(python, "-c", "import PIL")
+    val numpy = pythonPresent && available(python, "-c", "import numpy")
+    val bound = workspaceId?.let { DesktopShellRunner(manager).capability(it).bashAvailable } ?: false
+    return "本机 Shell：${if(shell) "可用" else "未发现"} · Python：${if(pythonPresent) "可用" else "未发现"} · Pillow：${if(pillow) "可用" else "未发现"} · NumPy：${if(numpy) "可用" else "未发现"} · 工作区 Shell：${if(bound) "可用" else "未绑定"}"
 }

@@ -33,7 +33,7 @@ class DocumentSession internal constructor(
     internal var snapshotGcCommits = 0
     private var closed = false
     private var inTransaction = false
-    var revision: Long = 0L
+    @Volatile var revision: Long = 0L
         internal set
     /** Nonfatal failure after a successful source save; the editor may display this separately. */
     var lastDraftError: String? = null
@@ -67,6 +67,87 @@ class DocumentSession internal constructor(
     fun setAttribute(ids: Set<String>, key: String, value: String) {
         requireIds(ids)
         change { doc, _, _ -> WatchXml.layers(doc).forEachIndexed { index, layer -> if (state.layerIds[index] in ids) layer.setAttribute(key, value) } }
+    }
+
+    fun agentCandidate(): AgentDocumentCandidate = AgentDocumentCandidate(
+        revision = revision,
+        watchXml = state.xml,
+        globalScript = state.scriptOverride ?: runCatching {
+            val script = workDir.resolve(scriptEntryName())
+            if (Files.isRegularFile(script)) Files.readString(script) else ""
+        }.getOrDefault(""),
+    )
+
+    fun beginAgentUndoGroup(): AgentUndoGroup {
+        ensureOpen()
+        val previous = state
+        check(!inTransaction) { "已有文档事务正在执行" }
+        inTransaction = true
+        return AgentUndoGroup { commit ->
+            val next = state
+            state = previous
+            inTransaction = false
+            if (commit) this.commit(next)
+        }
+    }
+
+    fun editAgentDocument(path: String, oldText: String, newText: String, expectedRevision: Long): AgentDocumentCandidate {
+        check(expectedRevision == revision) { "文档版本已变化：expected_revision=$expectedRevision，current_revision=$revision" }
+        val current = if (path == "watch.xml") state.xml else if (path == "scripts/script.txt") agentCandidate().globalScript else throw IllegalArgumentException("不支持的文档路径：$path")
+        require(oldText.isNotEmpty()) { "old_text 不能为空" }
+        require(current.indexOf(oldText) >= 0 && current.indexOf(oldText) == current.lastIndexOf(oldText)) { "old_text 必须在当前文档中唯一匹配" }
+        return replaceAgentDocument(path, current.replace(oldText, newText), expectedRevision)
+    }
+
+    fun replaceAgentDocument(path: String, content: String, expectedRevision: Long): AgentDocumentCandidate {
+        check(expectedRevision == revision) { "文档版本已变化：expected_revision=$expectedRevision，current_revision=$revision" }
+        when (path) {
+            "watch.xml" -> {
+                val parsed = WatchXml.parse(content)
+                WatchXml.validate(parsed)
+                val oldLayers = WatchXml.layers(document())
+                val oldIds = state.layerIds
+                val used = mutableSetOf<String>()
+                val newLayers = WatchXml.layers(parsed)
+                val newIds = newLayers.mapIndexed { index, layer ->
+                    val explicit = layer.getAttribute("id").takeIf(String::isNotBlank)
+                    val oldIndex = oldLayers.indices.firstOrNull { old ->
+                        oldIds[old] !in used && explicit != null && oldLayers[old].getAttribute("id") == explicit
+                    } ?: oldLayers.indices.firstOrNull { old ->
+                        oldIds[old] !in used && WatchXml.serialize(oldLayers[old]) == WatchXml.serialize(layer)
+                    } ?: index.takeIf { newLayers.size == oldLayers.size && oldIds.getOrNull(it) !in used }
+                    (oldIndex?.let(oldIds::get) ?: UUID.randomUUID().toString()).also(used::add)
+                }
+                val selected = selection.selected.intersect(newIds.toSet())
+                commit(state.copy(xml = WatchXml.serialize(parsed), layerIds = newIds,
+                    selection = LayerSelection(selected, selection.primary?.takeIf { it in selected }, selection.anchor?.takeIf { it in selected })))
+            }
+            "scripts/script.txt" -> {
+                val error = if (content.isBlank()) null else runCatching { com.ailife.wftools2.domain.editor.watchmaker.WmScriptRuntime().validateScript(content) }.getOrElse { it.message ?: "脚本无法编译" }
+                require(error == null) { "全局脚本无法编译：$error" }
+                commit(state.copy(scriptOverride = content))
+            }
+            else -> throw IllegalArgumentException("不支持的文档路径：$path")
+        }
+        return agentCandidate()
+    }
+
+    fun <T> agentTransaction(block: () -> T): T {
+        if (inTransaction) return block()
+        val previous = state
+        inTransaction = true
+        return try {
+            val result = block()
+            val next = state
+            state = previous
+            inTransaction = false
+            commit(next)
+            result
+        } catch (error: Throwable) {
+            state = previous
+            inTransaction = false
+            throw error
+        }
     }
 
     /** Applies one completed multi-layer gesture as one undoable command. */
@@ -199,9 +280,8 @@ class DocumentSession internal constructor(
     }
 
     /** Transactional copy: validate/read all inputs before adding any document state. */
-    fun importAssets(paths: List<Path>, createLayers: Boolean = true, x: Double = 0.0, y: Double = 0.0) {
+    fun importAssets(paths: List<Path>, createLayers: Boolean = true, x: Double = 0.0, y: Double = 0.0): List<String> =
         importAssetsInternal(paths, createLayers, x, y)
-    }
 
     /** Imports only resource entries from another WatchMaker archive. */
     fun importWatchAssets(source: Path,prepareAsset:(Path)->Path={it}) {
