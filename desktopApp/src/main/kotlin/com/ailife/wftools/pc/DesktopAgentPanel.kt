@@ -795,7 +795,11 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
             else -> throw IllegalStateException("附件无法复制到工作区")
         }
         val target = workspace.paths.root.resolve(relative)
-        val mime = Files.probeContentType(target) ?: if (isImageFile(target)) "image/png" else "application/octet-stream"
+        // Keep a conversation-local copy for visual inputs so a later workspace
+        // switch cannot invalidate the image sent with this message. Other
+        // files stay in workspace/ and are discovered there by the Agent.
+        if (isImageFile(target)) return app.agentConversationRepository.addImageAttachment(conversation.id, target)
+        val mime = Files.probeContentType(target) ?: "application/octet-stream"
         return AgentAttachment(UUID.randomUUID().toString(), fileName, mime, Files.size(target), sha256(target), target.toString())
     }
 
