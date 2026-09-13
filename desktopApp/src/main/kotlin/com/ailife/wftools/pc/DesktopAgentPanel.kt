@@ -46,8 +46,10 @@ import com.ailife.wftools.agent.workspace.BashApproval
 import com.ailife.wftools.agent.workspace.BashApprovalStrategy
 import com.ailife.wftools.agent.workspace.ShellCommandRequest
 import com.ailife.wftools.agent.workspace.WorkspacePermissionSettings
-import com.ailife.wftools.pc.platform.chooseAgentImages
+import com.ailife.wftools.pc.platform.chooseAgentFiles
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 import java.util.Base64
 import java.util.concurrent.CompletableFuture
@@ -63,6 +65,7 @@ import javax.imageio.ImageIO
 
 /** Compact desktop workbench for the watch Agent. It deliberately uses a simple message stream,
  * rather than copying the mobile or IDE sidebar layouts. */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentController, modifier: Modifier = Modifier, theme: ThemePreference = ThemePreference.SYSTEM, onTheme: (ThemePreference) -> Unit = {}) {
     val viewModel = remember(app, doc) { app.agentModel(doc) }
@@ -87,15 +90,15 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
             val atBottom = info.totalItemsCount == 0 || (last != null && last.index == info.totalItemsCount - 1 && last.offset + last.size <= info.viewportEndOffset + 24)
             listState.isScrollInProgress to atBottom
         }.collect { (scrolling, atBottom) ->
-            // Content growth changes the geometry without user input; do not
-            // interpret that as scrolling away.  A wheel/drag update is the
-            // explicit signal that should pause following.
-            if (scrolling) followOutput = atBottom
-            else if (atBottom) followOutput = true
+            // Only an active scroll gesture is allowed to change this flag.
+            // Content growth often settles the list at the bottom for a frame;
+            // treating that as user intent re-enabled auto-follow while the
+            // wheel was still moving and pulled the viewport back.
+            if (scrolling) followOutput = nextAgentFollowOutput(followOutput, userScrollInProgress = true, atBottom)
         }
     }
     LaunchedEffect(viewModel.messages.size, viewModel.liveText) {
-        if (!followOutput) return@LaunchedEffect
+        if (!followOutput || listState.isScrollInProgress) return@LaunchedEffect
         // Wait for the new message/text height to be laid out, then use an
         // immediate scroll.  This avoids an animation competing with wheel
         // input while the provider is still streaming.
@@ -154,7 +157,13 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
             }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            LazyColumn(Modifier.fillMaxSize().padding(start = 10.dp, end = 18.dp), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 12.dp)) {
+            LazyColumn(
+                Modifier.fillMaxSize().padding(start = 10.dp, end = 18.dp)
+                    .onPointerEvent(PointerEventType.Scroll) { followOutput = false },
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(vertical = 12.dp),
+            ) {
                 if (viewModel.messages.isEmpty() && viewModel.liveText.isBlank()) item {
                     Text("描述你想修改的表盘内容。Agent 会先读取 revision，再验证 XML、脚本和预览。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                 }
@@ -198,7 +207,7 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
                     }
                 }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { chooseAgentImages(doc.window).forEach(viewModel::addAttachment) }, enabled = !viewModel.generating && app.agentSettings.attachmentImportAllowed) { Icon(Icons.Default.AttachFile, "添加图片") }
+                    IconButton(onClick = { chooseAgentFiles(doc.window).forEach(viewModel::addAttachment) }, enabled = !viewModel.generating && app.agentSettings.attachmentImportAllowed) { Icon(Icons.Default.AttachFile, "添加附件") }
                     Box {
                         TextButton(modifier = Modifier.widthIn(max = 104.dp), contentPadding = PaddingValues(horizontal = 5.dp), enabled = !viewModel.modelsLoading, onClick = { viewModel.refreshModels() }) {
                             Icon(Icons.Default.Memory, null, Modifier.size(15.dp)); Spacer(Modifier.width(3.dp)); Text(viewModel.selectedModel.ifBlank { "模型" }, maxLines = 1)
@@ -234,17 +243,14 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
 
 /** Keep provider tool-turn records, but paint only one copy of repeated prose. */
 internal fun visibleAgentMessages(messages: List<AgentMessage>, liveText: String, generating: Boolean): List<AgentMessage> {
-    val latestToolTurn = messages.indexOfLast { it.role == AgentMessageRole.ASSISTANT && it.toolCalls.isNotEmpty() }
-    return messages.filterIndexed { index, message ->
-        if (generating && liveText.isNotBlank() && message.role == AgentMessageRole.ASSISTANT && message.toolCalls.isEmpty() && message.content.trim() == liveText.trim()) return@filterIndexed false
-        if (message.role != AgentMessageRole.ASSISTANT || message.toolCalls.isEmpty() || message.content.isBlank()) return@filterIndexed true
-        val sameFinalText = messages.drop(index + 1).any { later ->
-            later.role == AgentMessageRole.ASSISTANT && later.content.trim() == message.content.trim()
-        }
-        val nextTurnIsStreaming = generating && liveText.isNotBlank() && index == latestToolTurn
-        !sameFinalText && !nextTurnIsStreaming
-    }
+    // A provider tool turn is persisted for protocol continuity, but its prose
+    // is represented by the compact tool-result banner below. Do not dedupe by
+    // text: two separate answers are allowed to have identical content.
+    return messages.filterNot { it.role == AgentMessageRole.ASSISTANT && it.toolCalls.isNotEmpty() }
 }
+
+internal fun nextAgentFollowOutput(current: Boolean, userScrollInProgress: Boolean, atBottom: Boolean): Boolean =
+    if (userScrollInProgress) atBottom else current
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable private fun AgentMessageBubble(message: AgentMessage, onRetry: (() -> Unit)? = null, retryEnabled: Boolean = true) {
@@ -273,7 +279,7 @@ internal fun visibleAgentMessages(messages: List<AgentMessage>, liveText: String
                         Text(toolDisplayName(message.toolName), Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
                         Text(if (message.content.contains("失败")) "失败" else "完成", style = MaterialTheme.typography.labelSmall, color = if (message.content.contains("失败")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
                     }
-                    if (expanded || message.content.contains("失败")) {
+                    if (expanded) {
                         Row(Modifier.fillMaxWidth().clickable { detailsExpanded = !detailsExpanded }, verticalAlignment = Alignment.CenterVertically) {
                             SelectionContainer { Text(message.content, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall) }
                             Text(if (detailsExpanded) "收起详情" else "查看详情", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
@@ -410,6 +416,7 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
     private var pendingFuture: CompletableFuture<Boolean>? = null
     private val toolInputs = mutableMapOf<String, String>()
     private val titleJobs = mutableMapOf<String, Job>()
+    private val attachmentMutex = Mutex()
     data class PendingBashApproval(val command: String, val workspaceId: String)
     var pendingBashApproval by mutableStateOf<PendingBashApproval?>(null)
         private set
@@ -682,9 +689,14 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
     fun addAttachment(path: java.nio.file.Path) {
         val conversation = activeConversation ?: return
         scope.launch(Dispatchers.IO) {
-            runCatching { app.agentConversationRepository.addImageAttachment(conversation.id, path) }
-                .onSuccess { pendingAttachments = pendingAttachments + it }
-                .onFailure { error = it.message ?: "图片无法添加" }
+            try {
+                val attachment = importAttachmentToWorkspace(conversation, path)
+                attachmentMutex.withLock { pendingAttachments = pendingAttachments + attachment }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                error = failure.message ?: "附件无法添加"
+            }
         }
     }
     /** Routes an image paste into the Agent composer when it owns focus. */
@@ -703,8 +715,10 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
             val conversation = activeConversation ?: return true
             scope.launch(Dispatchers.IO) {
                 try {
-                    val attachment = app.agentConversationRepository.addImageAttachment(conversation.id, temporary)
-                    pendingAttachments = pendingAttachments + attachment
+                    val attachment = importAttachmentToWorkspace(conversation, temporary)
+                    attachmentMutex.withLock { pendingAttachments = pendingAttachments + attachment }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
                 } catch (failure: Throwable) {
                     error = failure.message ?: "剪贴板图片无法添加"
                 } finally {
@@ -718,7 +732,13 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
         return true
     }
     fun removeAttachment(id: String) { pendingAttachments = pendingAttachments.filterNot { it.id == id } }
-    fun stop() { resolveBashApproval(false); shellRunner?.cancelAll(); job?.cancel(); job = null }
+    fun stop() {
+        val active = job ?: return
+        status = "正在停止…"
+        resolveBashApproval(false)
+        shellRunner?.cancelAll()
+        active.cancel(CancellationException("用户停止 Agent 响应"))
+    }
     fun close() { titleJobs.values.forEach(Job::cancel); titleJobs.clear(); stop(); scope.cancel() }
 
     private fun generateConversationTitle(
@@ -753,6 +773,37 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
     }
 
     private suspend fun refreshConversations() { conversations = app.agentConversationRepository.listConversations(doc.view.identity) }
+
+    private fun importAttachmentToWorkspace(conversation: AgentConversation, source: Path): AgentAttachment {
+        require(Files.isRegularFile(source) && !Files.isSymbolicLink(source)) { "附件不存在或不是普通文件" }
+        val manager = app.agentWorkspaceManager
+        val workspaceId = manager.bindingFor(doc.view.identity)?.workspaceId
+            ?: throw IllegalStateException("请先选择工作区")
+        val workspace = manager.get(workspaceId) ?: throw IllegalStateException("工作区不存在")
+        val fileName = source.fileName.toString().ifBlank { "附件-${UUID.randomUUID()}" }
+        var relative = "workspace/$fileName"
+        var suffix = 1
+        while (Files.exists(workspace.paths.root.resolve(relative))) {
+            val stem = fileName.substringBeforeLast('.', fileName)
+            val ext = fileName.substringAfterLast('.', "").takeIf { it.isNotBlank() }?.let { ".$it" }.orEmpty()
+            relative = "workspace/$stem-$suffix$ext"
+            suffix++
+        }
+        when (manager.importFile(workspaceId, source, relative)) {
+            com.ailife.wftools.agent.workspace.ImportResult.IMPORTED -> Unit
+            com.ailife.wftools.agent.workspace.ImportResult.QUOTA_EXCEEDED -> throw IllegalStateException("附件超过工作区配额")
+            else -> throw IllegalStateException("附件无法复制到工作区")
+        }
+        val target = workspace.paths.root.resolve(relative)
+        val mime = Files.probeContentType(target) ?: if (isImageFile(target)) "image/png" else "application/octet-stream"
+        return AgentAttachment(UUID.randomUUID().toString(), fileName, mime, Files.size(target), sha256(target), target.toString())
+    }
+
+    private fun isImageFile(path: Path): Boolean = runCatching { ImageIO.read(path.toFile()) != null }.getOrDefault(false)
+
+    private fun sha256(path: Path): String = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(Files.readAllBytes(path)).joinToString("") { "%02x".format(it) }
+
     private fun detectGlobalPython(): Boolean {
         val command = if (System.getProperty("os.name").contains("Windows", ignoreCase = true)) "python" else "python3"
         return runCatching {
@@ -763,7 +814,11 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
         }.getOrDefault(false)
     }
     private fun AgentMessage.toRequestMessage() = AgentRequestMessage(
-        role = role, content = if (role == AgentMessageRole.TOOL) toolResultJson ?: content else content, name = toolName, toolCallId = toolCallId,
+        role = role,
+        content = if (role == AgentMessageRole.TOOL) toolResultJson ?: content else if (role == AgentMessageRole.USER && attachments.isNotEmpty()) {
+            content + "\n\n附件已放入绑定工作区，文件名：" + attachments.joinToString { it.displayName }
+        } else content,
+        name = toolName, toolCallId = toolCallId,
         toolCalls = toolCalls.map { AgentAssistantToolCall(it.id, it.name, it.argumentsJson) },
         images = if (role == AgentMessageRole.USER) attachments.mapNotNull { attachment -> attachment.localPath?.let { path -> runCatching { AgentImageInput.fromFile(java.nio.file.Path.of(path)) }.getOrNull() } } else emptyList(),
     )

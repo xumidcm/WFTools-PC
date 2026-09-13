@@ -84,17 +84,32 @@ class AgentConversationRepository(private val root: Path) {
         writeConversations(current.watchScope, listConversations(current.watchScope).filterNot { it.id == id } + current.copy(endedAt = now, updatedAt = now))
     }
     @Synchronized fun addImageAttachment(conversationId: String, source: Path): AgentAttachment {
-        val conversation = requireNotNull(getConversation(conversationId))
         AgentImageInput.fromFile(source)
-        val fileName = source.fileName.toString()
-        val extension = fileName.substringAfterLast('.', "png").lowercase().takeIf { it in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp") } ?: "png"
+        return addFileAttachment(conversationId, source, requireImage = true)
+    }
+
+    /** Copies any user-selected file into the conversation attachment store.
+     * Image validation remains opt-in so scripts, archives and other workspace
+     * inputs can be attached without pretending they are images. */
+    @Synchronized fun addFileAttachment(conversationId: String, source: Path): AgentAttachment =
+        addFileAttachment(conversationId, source, requireImage = false)
+
+    private fun addFileAttachment(conversationId: String, source: Path, requireImage: Boolean): AgentAttachment {
+        val conversation = requireNotNull(getConversation(conversationId))
+        require(Files.isRegularFile(source) && !Files.isSymbolicLink(source)) { "附件不存在或不是普通文件" }
+        if (requireImage) AgentImageInput.fromFile(source)
+        require(Files.size(source) <= MAX_ATTACHMENT_BYTES) { "附件超过 100 MB" }
+        val fileName = source.fileName.toString().ifBlank { "附件" }
+        val extension = fileName.substringAfterLast('.', "bin").lowercase().takeIf { it.length in 1..12 } ?: "bin"
         val id = UUID.randomUUID().toString()
         val directory = attachmentDir(conversation)
         Files.createDirectories(directory)
         val target = directory.resolve("$id.$extension")
         Files.copy(source, target, StandardCopyOption.COPY_ATTRIBUTES)
         val digest = hash(Files.readAllBytes(target))
-        return AgentAttachment(id, fileName, "image/${if (extension == "jpg") "jpeg" else extension}", Files.size(target), digest, target.toString())
+        val mime = Files.probeContentType(source)
+            ?: if (requireImage) "image/${if (extension == "jpg") "jpeg" else extension}" else "application/octet-stream"
+        return AgentAttachment(id, fileName, mime, Files.size(target), digest, target.toString())
     }
     @Synchronized fun addImageBytes(conversationId: String, displayName: String, bytes: ByteArray): AgentAttachment {
         val conversation = requireNotNull(getConversation(conversationId))
@@ -118,4 +133,8 @@ class AgentConversationRepository(private val root: Path) {
     private fun writeJson(file: Path, value: Any) { Files.createDirectories(file.parent); val temp = Files.createTempFile(file.parent, ".agent-", ".tmp"); val json = when (value) { is List<*> -> if (value.firstOrNull() is AgentConversation || value.isEmpty()) AgentStorageJson.conversations(value.filterIsInstance<AgentConversation>()) else AgentStorageJson.messages(value.filterIsInstance<AgentMessage>()); else -> AgentJsonWriter.encode(value) }; Files.writeString(temp, json); Files.move(temp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE) }
     private fun hash(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
     private fun hash(value: ByteArray) = MessageDigest.getInstance("SHA-256").digest(value).joinToString("") { "%02x".format(it) }
+
+    private companion object {
+        const val MAX_ATTACHMENT_BYTES = 100L * 1024L * 1024L
+    }
 }

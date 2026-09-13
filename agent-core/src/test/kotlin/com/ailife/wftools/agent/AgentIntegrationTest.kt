@@ -11,6 +11,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.nio.file.Files
+import java.nio.file.Path
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import javax.imageio.ImageIO
@@ -140,6 +141,17 @@ class AgentIntegrationTest {
         assertEquals("scrape_page", WatchAgentToolName.SCRAPE_PAGE.wireName)
     }
 
+    @Test fun `conversation accepts non image attachments without forcing image decoding`() {
+        val root = temp.newFolder("generic-attachments").toPath()
+        val repository = AgentConversationRepository(root)
+        val conversation = repository.createConversation("face")
+        val source = root.resolve("script.py")
+        Files.writeString(source, "print('ok')")
+        val attachment = repository.addFileAttachment(conversation.id, source)
+        assertEquals("script.py", attachment.displayName)
+        assertFalse(attachment.mimeType.orEmpty().startsWith("image/"))
+        assertTrue(Files.isRegularFile(Path.of(attachment.localPath!!)))
+    }
     @Test fun `retry truncates later messages but preserves the selected user request`() {
         val repository = AgentConversationRepository(temp.newFolder("retry-history").toPath())
         val conversation = repository.createConversation("face")

@@ -15,6 +15,11 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 class AgentCoreContractTest {
     @Test fun `watch agent allows up to fifty provider tool rounds`() {
@@ -57,6 +62,22 @@ class AgentCoreContractTest {
         val results = kotlinx.coroutines.runBlocking { scheduler.execute(calls) }
         assertEquals(8, results.size)
         assertTrue(maximum.get() <= 4)
+    }
+
+    @Test fun `cancelling a blocking write tool returns without waiting for its timeout`() = kotlinx.coroutines.runBlocking {
+        coroutineScope {
+        val started = CountDownLatch(1)
+        val scheduler = WatchAgentToolScheduler({ call ->
+            started.countDown()
+            try { Thread.sleep(TimeUnit.SECONDS.toMillis(30)) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+            WatchAgentToolResult(call.id, call.name, 0L)
+        })
+        val job = launch(kotlinx.coroutines.Dispatchers.Default) { scheduler.execute(listOf(WatchAgentToolCall("write", "write_workspace_file"))) }
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+        job.cancel()
+        withTimeout(1_000) { job.join() }
+        assertTrue(job.isCancelled)
+        }
     }
 
     @Test fun `workspace rejects traversal and enforces quota`() {

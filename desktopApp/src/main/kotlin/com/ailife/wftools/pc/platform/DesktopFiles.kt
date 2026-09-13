@@ -32,10 +32,12 @@ private fun nativeFileDialog(owner: Component?, title: String, mode: Int): FileD
     }).apply { iconImages=nativeDialogIconImages(owner) }
 }
 
-private fun chooseOpenWithNativeDialog(owner: Component?, title: String, extensions: String): List<Path> {
+private fun chooseOpenWithNativeDialog(owner: Component?, title: String, extensions: String? = null): List<Path> {
     val dialog = nativeFileDialog(owner, title, FileDialog.LOAD).apply {
         isMultipleMode = true
-        filenameFilter = FilenameFilter { _, name -> extensions.split(',').any { name.endsWith(".$it", true) } }
+        filenameFilter = extensions?.takeIf(String::isNotBlank)?.let { allowed ->
+            FilenameFilter { _, name -> allowed.split(',').any { name.endsWith(".$it", true) } }
+        }
     }
     dialog.isVisible = true
     return dialog.files?.map { it.toPath() }.orEmpty()
@@ -43,7 +45,8 @@ private fun chooseOpenWithNativeDialog(owner: Component?, title: String, extensi
 fun chooseWatchFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, DesktopI18n.text("打开 WatchMaker 表盘"), "watch")
 fun chooseAssets(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, DesktopI18n.text("导入图片、视频或字体"), "png,jpg,jpeg,gif,webp,bmp,mp4,webm,mov,m4v,avi,mkv,ttf,otf,fnt")
 fun chooseAudioFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, DesktopI18n.text("添加音频资源"), "mp3,wav,ogg,m4a,aac,flac")
-fun chooseAgentImages(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, "添加 Agent 图片", "png,jpg,jpeg,gif,webp,bmp")
+fun chooseAgentFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, "添加 Agent 附件")
+fun chooseAgentImages(owner: Component?): List<Path> = chooseAgentFiles(owner)
 fun chooseSavePath(owner: Component?, source: Path?, title: String, allowExisting: Boolean = true): Path? {
     val dialog = nativeFileDialog(owner, DesktopI18n.text("保存 WatchMaker 表盘"), FileDialog.SAVE).apply {
         filenameFilter = FilenameFilter { _, name -> name.endsWith(".watch", true) }

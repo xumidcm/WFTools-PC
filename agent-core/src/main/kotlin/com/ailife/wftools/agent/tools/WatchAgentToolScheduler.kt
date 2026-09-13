@@ -62,7 +62,11 @@ class WatchAgentToolScheduler(
                 reads += call
             } else {
                 flushReads()
-                results += executor.execute(call)
+                // Keep blocking desktop tools (native shell, image HTTP and
+                // workspace copies) off the coroutine thread. Cancellation
+                // interrupts the worker immediately so Stop does not wait for
+                // an external read timeout to elapse.
+                results += runInterruptible(Dispatchers.IO) { executor.execute(call) }
             }
         }
         flushReads()

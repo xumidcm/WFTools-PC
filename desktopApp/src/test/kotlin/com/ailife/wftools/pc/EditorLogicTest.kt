@@ -77,16 +77,29 @@ class EditorLogicTest {
         assertTrue(documentPasteOwnsFocus(EditorFocus.LAYERS))
         assertFalse(documentPasteOwnsFocus(EditorFocus.TEXT))
     }
-    @Test fun `streaming and final assistant text do not repeat an earlier tool preamble`() {
+    @Test fun `tool turns are represented only by compact tool banners while final text stays visible`() {
         val user = AgentMessage.user("c", "画一个图", 1L)
         val earlier = AgentMessage.assistant("c", "上一轮内容", 2L).copy(toolCalls = listOf(AgentToolCallRecord("a", "inspect_face", "{}")))
         val current = AgentMessage.assistant("c", "可以生成图片", 3L).copy(toolCalls = listOf(AgentToolCallRecord("b", "generate_image", "{}")))
         val streaming = visibleAgentMessages(listOf(user, earlier, current), "可以生成图片", true)
-        assertEquals(listOf(user.id, earlier.id), streaming.map { it.id })
+        assertEquals(listOf(user.id), streaming.map { it.id })
         val final = AgentMessage.assistant("c", "可以生成图片", 4L)
         val completed = visibleAgentMessages(listOf(user, earlier, current, final), "", false)
-        assertEquals(listOf(user.id, earlier.id, final.id), completed.map { it.id })
+        assertEquals(listOf(user.id, final.id), completed.map { it.id })
     }
+
+    @Test fun `same assistant text in separate completed turns is never hidden`() {
+        val first = AgentMessage.assistant("c", "已完成", 1L)
+        val second = AgentMessage.assistant("c", "已完成", 2L)
+        assertEquals(listOf(first.id, second.id), visibleAgentMessages(listOf(first, second), "", false).map { it.id })
+    }
+
+    @Test fun `stream follow pauses only for an active user scroll and never re enables itself`() {
+        assertFalse(nextAgentFollowOutput(true, userScrollInProgress = true, atBottom = false))
+        assertTrue(nextAgentFollowOutput(false, userScrollInProgress = true, atBottom = true))
+        assertFalse(nextAgentFollowOutput(false, userScrollInProgress = false, atBottom = true))
+    }
+
     @Test fun `atlas pages and sounds cannot be applied as fonts or image paths`() {
         fun asset(relative: String) = AssetItem(Path.of(relative),relative,relative.substringBefore('/'))
         assertNull(assetTargetAttribute(asset("fonts_bm/clock.png"))); assertNull(assetTargetAttribute(asset("sfx/tap.mp3")))
