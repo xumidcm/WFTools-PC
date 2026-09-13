@@ -367,12 +367,13 @@ class EditorApplicationModel(val scope: CoroutineScope, val preferences: EditorP
     private val openMutex = Mutex()
     private val agentSaveMutex = Mutex()
     fun updateAgentSettings(value: AgentFeatureSettings) {
-        agentSettings = value
-        if (!value.enabled) {
+        val next = value
+        agentSettings = next
+        if (!next.enabled) {
             agentModels.values.forEach(DesktopAgentViewModel::close); agentModels.clear()
             documents.forEach { it.agentFullscreen = false; it.requestedInspectorTab = "属性" }
         }
-        scope.launch { agentSaveMutex.withLock { runCatching { withContext(Dispatchers.IO) { preferences.saveAgentSettings(agentSettings) } } } }
+        scope.launch { agentSaveMutex.withLock { runCatching { withContext(Dispatchers.IO) { preferences.saveAgentSettings(next) } } } }
     }
     init { scope.launch { withContext(Dispatchers.IO) { listOf(preferences.recentProjects(),preferences.lastSession(),preferences.lastActive(),preferences.lastActiveDraftId()) }.let { values ->
         @Suppress("UNCHECKED_CAST") val recent = values[0] as List<RecentProject>

@@ -67,6 +67,7 @@ import javax.imageio.ImageIO
 internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentController, modifier: Modifier = Modifier, theme: ThemePreference = ThemePreference.SYSTEM, onTheme: (ThemePreference) -> Unit = {}) {
     val viewModel = remember(app, doc) { app.agentModel(doc) }
     LaunchedEffect(viewModel) { viewModel.start() }
+    LaunchedEffect(viewModel, app.agentSettings.activeProviderId) { viewModel.syncProviderSelection() }
     var showSettings by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<AgentConversation?>(null) }
     var renameDraft by remember { mutableStateOf("") }
@@ -262,7 +263,7 @@ internal fun visibleAgentMessages(messages: List<AgentMessage>, liveText: String
             },
         ) {
         Surface(color = if (user) MaterialTheme.colorScheme.primaryContainer else if (tool) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.padding(horizontal = 12.dp, vertical = if (tool) 6.dp else 9.dp), verticalArrangement = Arrangement.spacedBy(if (tool) 2.dp else 4.dp)) {
                 if (tool) {
                     Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
@@ -283,17 +284,12 @@ internal fun visibleAgentMessages(messages: List<AgentMessage>, liveText: String
                             }
                         }
                     }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        IconButton(onClick = { copyAgentText(if (detailsExpanded) toolDetails(message) else message.content) }, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Default.ContentCopy, "复制工具结果", Modifier.size(15.dp))
-                        }
-                    }
                 } else {
                     Text(if (user) "你" else "Agent", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    SelectionContainer {
-                        Text(remember(message.content) { agentMarkdown(message.content.ifBlank { "（无文本）" }) }, style = MaterialTheme.typography.bodyMedium)
+                    if (message.content.isNotBlank()) SelectionContainer {
+                        Text(remember(message.content) { agentMarkdown(message.content) }, style = MaterialTheme.typography.bodyMedium)
                     }
-                    if (message.toolCalls.isNotEmpty()) Text("正在调用 ${message.toolCalls.joinToString { toolDisplayName(it.name) }}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    if (message.toolCalls.isNotEmpty()) Text("调用工具", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
                 message.attachments.forEach { attachment ->
                     val bitmap = remember(attachment.localPath) { runCatching { org.jetbrains.skia.Image.makeFromEncoded(Files.readAllBytes(Path.of(attachment.localPath!!))).toComposeImageBitmap() }.getOrNull() }
@@ -315,13 +311,10 @@ internal fun visibleAgentMessages(messages: List<AgentMessage>, liveText: String
             onDismissRequest = { contextMenu = false },
             modifier = Modifier.testTag("agent-message-context-menu"),
         ) {
-            DropdownMenuItem(
-                text = { Text(if (tool) "复制工具结果" else "复制消息") },
+            if (!tool) DropdownMenuItem(
+                text = { Text("复制消息") },
                 leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
-                onClick = {
-                    contextMenu = false
-                    copyAgentText(if (tool && detailsExpanded) toolDetails(message) else message.content)
-                },
+                onClick = { contextMenu = false; copyAgentText(message.content) },
             )
             if (user && onRetry != null) {
                 DropdownMenuItem(
@@ -358,7 +351,9 @@ private fun toolDisplayName(raw: String?): String = when (raw) {
     "commit_face_mirror" -> "提交表盘镜像"
     "import_face_resource" -> "导入表盘资源"
     "generate_image" -> "生成图片"
+    "edit_image" -> "编辑图片"
     "search_web" -> "搜索资料"
+    "scrape_page" -> "抓取网页"
     else -> raw?.replace('_', ' ')?.ifBlank { null } ?: "工具步骤"
 }
 
@@ -478,6 +473,17 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
             val conversation = conversations.firstOrNull() ?: app.agentConversationRepository.createConversation(doc.view.identity)
             activeConversation = conversation
             messages = app.agentConversationRepository.listMessages(conversation.id)
+        }
+    }
+
+    fun syncProviderSelection() {
+        if (!started) return
+        scope.launch(Dispatchers.IO) {
+            val profile = app.agentProviderStore.active(app.agentSettings.activeProviderId)
+            selectedModel = profile?.modelId ?: app.agentSettings.defaultModelId.orEmpty()
+            thinkingDepth = profile?.reasoningEffort ?: "default"
+            modelOptions = emptyList()
+            modelMenu = false
         }
     }
 

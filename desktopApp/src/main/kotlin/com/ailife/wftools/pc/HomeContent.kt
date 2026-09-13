@@ -152,9 +152,9 @@ internal fun performFileAssociationAction(
     var associationError by remember{mutableStateOf<String?>(null)}
     var page by remember { mutableIntStateOf(initialPage.coerceIn(0, 1)) }
     var agent by remember { mutableStateOf(app.agentSettings) }
-    var endpoint by remember { mutableStateOf("") }
+    var endpoint by remember { mutableStateOf("https://api.openai.com/v1") }
     var providerId by remember { mutableStateOf(java.util.UUID.randomUUID().toString()) }
-    var providerName by remember { mutableStateOf("") }
+    var providerName by remember { mutableStateOf("OpenAI") }
     var protocol by remember { mutableStateOf(AiProtocol.CHAT_COMPLETIONS) }
     var apiKey by remember { mutableStateOf("") }
     var headerName by remember { mutableStateOf("") }
@@ -196,15 +196,44 @@ internal fun performFileAssociationAction(
             finally { providerBusy = false }
         }
     }
+    fun persistProviderDraft(): Boolean {
+        val baseUrl = endpoint.trim()
+        if (baseUrl.isBlank()) {
+            providerMessage = "请填写接口地址后再保存 Provider。"
+            return false
+        }
+        return runCatching {
+            val profile = AiProviderProfile(
+                id = providerId,
+                name = providerName.ifBlank { "OpenAI" },
+                protocol = protocol,
+                baseUrl = baseUrl,
+                modelId = model.takeIf(String::isNotBlank),
+                contextWindowOverride = contextWindow.toLongOrNull(),
+            )
+            val headers = if (headerName.isNotBlank()) mapOf(headerName.trim() to headerValue) else emptyMap()
+            app.agentProviderStore.save(profile, apiKey)
+            app.agentProviderStore.saveHeaders(profile.id, headers)
+            profiles = app.agentProviderStore.profiles()
+            providerName = profile.name
+            agent = agent.copy(
+                activeProviderId = profile.id,
+                defaultModelId = profile.modelId,
+                contextWindowOverride = profile.contextWindowOverride,
+            )
+            app.updateAgentSettings(agent)
+            true
+        }.onFailure { providerMessage = it.message ?: "Provider 保存失败" }.getOrDefault(false)
+    }
     LaunchedEffect(association){associated=withContext(Dispatchers.IO){runCatching{association.isAssociated()}.getOrDefault(false)};associationLoaded=true}
     LaunchedEffect(agent.enabled) {
         if (agent.enabled) {
             profiles = app.agentProviderStore.profiles()
             val profile = app.agentProviderStore.active(agent.activeProviderId)
             providerId = profile?.id ?: providerId
-            providerName = profile?.name.orEmpty()
+            providerName = profile?.name ?: "OpenAI"
             protocol = profile?.protocol ?: AiProtocol.CHAT_COMPLETIONS
-            endpoint = profile?.baseUrl.orEmpty()
+            endpoint = profile?.baseUrl ?: "https://api.openai.com/v1"
             model = profile?.modelId ?: agent.defaultModelId.orEmpty()
             apiKey = profile?.let { app.agentProviderStore.apiKey(it.id) }.orEmpty()
             val headers = profile?.let { app.agentProviderStore.headers(it.id) }.orEmpty()
@@ -249,10 +278,12 @@ internal fun performFileAssociationAction(
                             apiKey = app.agentProviderStore.apiKey(profile.id).orEmpty()
                             val headers = app.agentProviderStore.headers(profile.id)
                             headerName = headers.keys.firstOrNull().orEmpty(); headerValue = headers.values.firstOrNull().orEmpty()
+                            agent = agent.copy(activeProviderId = profile.id, defaultModelId = profile.modelId, contextWindowOverride = profile.contextWindowOverride)
+                            app.updateAgentSettings(agent)
                         }) }
                     }
                 }
-                OutlinedButton(onClick = { providerId = java.util.UUID.randomUUID().toString(); providerName = ""; endpoint = ""; model = ""; apiKey = ""; headerName = ""; headerValue = ""; contextWindow = "" }) { Text("新增") }
+                OutlinedButton(onClick = { providerId = java.util.UUID.randomUUID().toString(); providerName = "OpenAI"; protocol = AiProtocol.CHAT_COMPLETIONS; endpoint = "https://api.openai.com/v1"; model = ""; apiKey = ""; headerName = ""; headerValue = ""; contextWindow = "" }) { Text("新增") }
             }
             OutlinedTextField(providerName, { providerName = it }, Modifier.fillMaxWidth(), label = { Text("Provider 名称") }, singleLine = true)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -265,9 +296,11 @@ internal fun performFileAssociationAction(
                 OutlinedTextField(headerValue, { headerValue = it }, Modifier.weight(1f), label = { Text("Header 值") }, singleLine = true)
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(model,{ model=it },Modifier.weight(1f).testTag("agent-model-id"),label={Text("模型 ID（可手填）")},singleLine=true)
+                    OutlinedTextField(model,{ model=it },Modifier.weight(1f).testTag("agent-model-id"),label={Text("模型 ID（可手填）")},singleLine=true)
                 Box {
-                    IconButton(onClick = { pullModels(); modelMenu = true }, enabled = !providerBusy) { Icon(Icons.Default.Refresh, "拉取 models") }
+                    OutlinedButton(onClick = { pullModels(); modelMenu = true }, enabled = !providerBusy, contentPadding = PaddingValues(horizontal = 10.dp)) {
+                        Icon(Icons.Default.Refresh, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text(if (providerBusy) "拉取中…" else "拉取模型")
+                    }
                     DropdownMenu(modelMenu, { modelMenu = false }) {
                         if (models.isEmpty()) DropdownMenuItem(text = { Text(if (providerBusy) "正在拉取…" else "暂无模型") }, enabled = false, onClick = {})
                         models.forEach { id -> DropdownMenuItem(text = { Text(id) }, onClick = { model = id; modelMenu = false }) }
@@ -280,27 +313,23 @@ internal fun performFileAssociationAction(
                     providerBusy=true; providerMessage=null
                     scope.launch {
                         try {
+                            if (model.isBlank()) throw IllegalStateException("请先点击“拉取模型”并选择一个模型")
                             val old = profiles.firstOrNull { it.id == providerId }
-                            val profile = (old ?: AiProviderProfile(providerId,providerName.ifBlank { "自定义 Provider" },protocol,endpoint)).copy(name=providerName.ifBlank { "自定义 Provider" },protocol=protocol,baseUrl=endpoint.trim(),modelId=model.takeIf(String::isNotBlank),contextWindowOverride=contextWindow.toLongOrNull())
+                            val profile = (old ?: AiProviderProfile(providerId,providerName.ifBlank { "OpenAI" },protocol,endpoint)).copy(name=providerName.ifBlank { "OpenAI" },protocol=protocol,baseUrl=endpoint.trim(),modelId=model,contextWindowOverride=contextWindow.toLongOrNull())
                             val headers = if (headerName.isNotBlank()) mapOf(headerName.trim() to headerValue) else emptyMap()
-                            val found = withContext(Dispatchers.IO) { AgentProviderClient().listModels(profile, apiKey, headers) }
-                            models = found.map { it.id }
-                            val selected = model.takeIf { it in models } ?: models.firstOrNull().orEmpty()
-                            model = selected
-                            if (selected.isBlank()) throw IllegalStateException("Provider 没有可用模型")
                             withContext(Dispatchers.IO) {
-                                AgentProviderClient().send(profile.copy(modelId=selected), apiKey, com.ailife.wftools.agent.provider.AgentProviderRequest(listOf(com.ailife.wftools.agent.provider.AgentRequestMessage(com.ailife.wftools.agent.model.AgentMessageRole.USER, "Reply OK")), stream = false), headers)
+                                AgentProviderClient().send(profile, apiKey, com.ailife.wftools.agent.provider.AgentProviderRequest(listOf(com.ailife.wftools.agent.provider.AgentRequestMessage(com.ailife.wftools.agent.model.AgentMessageRole.USER, "Reply OK")), stream = false), headers)
                             }
-                            app.agentProviderStore.save(profile.copy(modelId=selected), apiKey)
+                            app.agentProviderStore.save(profile, apiKey)
                             app.agentProviderStore.saveHeaders(profile.id, headers)
                             profiles = app.agentProviderStore.profiles()
-                            agent = agent.copy(activeProviderId=profile.id, defaultModelId=selected, contextWindowOverride=contextWindow.toLongOrNull())
+                            agent = agent.copy(activeProviderId=profile.id, defaultModelId=model, contextWindowOverride=contextWindow.toLongOrNull())
                             app.updateAgentSettings(agent)
-                            providerMessage = "连接测试成功，已发现 ${models.size} 个模型；视觉和工具调用能力以模型实际响应为准。"
+                            providerMessage = "连接测试成功；视觉和工具调用能力以模型实际响应为准。"
                         } catch (error: Exception) { providerMessage = error.message ?: "Provider 连接失败" }
                         finally { providerBusy=false }
                     }
-                }) { Text(if(providerBusy) "连接中…" else "连接并拉取模型") }
+                }) { Text(if(providerBusy) "测试中…" else "测试连接") }
                 if (models.isNotEmpty()) Text("可选：${models.take(3).joinToString(", ")}", style=MaterialTheme.typography.bodySmall)
             }
             providerMessage?.let { Text(it, style=MaterialTheme.typography.bodySmall, color=if(it.contains("失败")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -312,7 +341,11 @@ internal fun performFileAssociationAction(
             OutlinedTextField(imageKey, { imageKey = it }, Modifier.fillMaxWidth(), label = { Text("图片接口 API Key · 可留空") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
             OutlinedTextField(searchEndpoint, { searchEndpoint = it; agent = agent.copy(searchEndpoint = it.takeIf(String::isNotBlank)); app.updateAgentSettings(agent) }, Modifier.fillMaxWidth(), label = { Text("搜索接口 · 可选") }, singleLine = true)
             OutlinedTextField(searchKey, { searchKey = it }, Modifier.fillMaxWidth(), label = { Text("搜索接口 API Key · 可留空") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
-            OutlinedButton(onClick = { app.agentProviderStore.saveImageApiKey(imageKey); app.agentProviderStore.saveSearchApiKey(searchKey); providerMessage = "外部接口凭据已加密保存。" }) { Text("保存外部接口凭据") }
+            OutlinedButton(onClick = {
+                app.agentProviderStore.saveImageApiKey(imageKey)
+                app.agentProviderStore.saveSearchApiKey(searchKey)
+                if (persistProviderDraft()) providerMessage = "Provider 与外部接口凭据已保存。"
+            }) { Text("保存外部接口凭据") }
             Text("图片附件和本机预览可直接使用；外部图片生成、网络搜索和网页正文抓取需配置兼容接口。", style=MaterialTheme.typography.bodySmall, color=MaterialTheme.colorScheme.onSurfaceVariant)
             Text("工作区",style=MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -394,7 +427,7 @@ internal fun performFileAssociationAction(
         }
         associationError?.let{Text(it,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)}
       }
-    }},confirmButton={Button(onClick=onDismiss){Text("完成")}},dismissButton={TextButton(onClick=onDismiss){Text("取消")}})
+    }},confirmButton={Button(onClick={ if (persistProviderDraft()) onDismiss() }){Text("完成")}},dismissButton={TextButton(onClick=onDismiss){Text("取消")}})
 }
 
 @Composable private fun HomeCanvasInputSwitch(label:String,checked:Boolean,tag:String,onChecked:(Boolean)->Unit) {
