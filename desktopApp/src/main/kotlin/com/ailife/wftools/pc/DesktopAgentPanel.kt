@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -104,7 +105,12 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
         // input while the provider is still streaming.
         withFrameNanos { }
         val count = listState.layoutInfo.totalItemsCount
-        if (count > 0) listState.scrollToItem(count - 1)
+        if (count > 0) {
+            val layout = listState.layoutInfo
+            val last = layout.visibleItemsInfo.lastOrNull { it.index == count - 1 }
+            val viewportHeight = layout.viewportEndOffset - layout.viewportStartOffset
+            listState.scrollToItem(count - 1, (last?.size?.minus(viewportHeight) ?: 0).coerceAtLeast(0))
+        }
     }
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).testTag("agent-panel")) {
         Surface(tonalElevation = 2.dp, color = MaterialTheme.colorScheme.surfaceContainer) {
@@ -113,12 +119,17 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
                     Icon(Icons.Default.AutoAwesome, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                     Column(Modifier.weight(1f)) {
                         Text(viewModel.activeConversation?.title?.ifBlank { "新会话" } ?: "表盘 AI", fontWeight = FontWeight.SemiBold, maxLines = 1)
-                        Text(viewModel.status ?: "当前表盘 · revision ${doc.view.revision}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                        val displayedTokens = (viewModel.activeConversation?.tokenCount ?: 0L) +
+                            (if (viewModel.generating) viewModel.turnTokens ?: 0L else 0L)
+                        Text((viewModel.status ?: "当前表盘 · revision ${doc.view.revision}") +
+                            displayedTokens.takeIf { it > 0L }?.let { " · ${formatAgentCount(it)} tokens" }.orEmpty(),
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     IconButton(onClick = { viewModel.showHistory = true }, enabled = !viewModel.generating) { Icon(Icons.Default.History, "历史") }
                     IconButton(onClick = { viewModel.newConversation() }, enabled = !viewModel.generating) { Icon(Icons.Default.Add, "新建") }
+                    IconButton(onClick = viewModel::compressContext, enabled = !viewModel.generating && viewModel.messages.size >= 2) { Icon(Icons.Default.Compress, "压缩上下文") }
                     IconButton(onClick = { if (doc.agentFullscreen) doc.requestedInspectorTab = "AI"; doc.agentFullscreen = !doc.agentFullscreen }) { Icon(if (doc.agentFullscreen) Icons.Default.CloseFullscreen else Icons.Default.OpenInFull, if (doc.agentFullscreen) "恢复" else "最大化") }
                     IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Agent 设置") }
                 }
@@ -303,6 +314,7 @@ internal fun nextAgentFollowOutput(current: Boolean, userScrollInProgress: Boole
                     else Text(attachment.displayName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
                 if (!tool) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    message.turnTokens?.takeIf { it > 0L }?.let { Text("${formatAgentCount(it)} tokens", Modifier.align(Alignment.CenterVertically).padding(end = 4.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     if (onRetry != null) IconButton(enabled = retryEnabled, onClick = onRetry, modifier = Modifier.size(28.dp)) {
                         Icon(Icons.Default.Refresh, "重试消息", Modifier.size(15.dp))
                     }
@@ -333,6 +345,12 @@ internal fun nextAgentFollowOutput(current: Boolean, userScrollInProgress: Boole
         }
         }
     }
+}
+
+private fun formatAgentCount(value: Long): String = when {
+    value < 1_000 -> value.toString()
+    value < 1_000_000 -> "${(value / 100.0).toInt() / 10.0}K"
+    else -> "${(value / 100_000.0).toInt() / 10.0}M"
 }
 
 private fun copyAgentText(text: String) {
@@ -432,6 +450,8 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
         private set
     var liveText by mutableStateOf("")
         private set
+    var turnTokens by mutableStateOf<Long?>(null)
+        private set
     var generating by mutableStateOf(false)
         private set
     var status by mutableStateOf<String?>(null)
@@ -502,6 +522,27 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
             globalPythonAvailable = detectGlobalPython()
             val conversation = app.agentConversationRepository.createConversation(doc.view.identity)
             activeConversation = conversation; messages = emptyList(); refreshConversations()
+        }
+    }
+
+    /** Compacts visible conversation text with a tool-free provider request. */
+    fun compressContext() {
+        if (generating) return
+        val conversation = activeConversation ?: return
+        if (messages.count { it.role == AgentMessageRole.USER || it.role == AgentMessageRole.ASSISTANT && it.toolCalls.isEmpty() } < 2) return
+        generating = true; status = "正在压缩上下文…"; error = null
+        job = scope.launch(Dispatchers.IO) {
+            try {
+                val store = app.agentProviderStore
+                val profile = store.active(app.agentSettings.activeProviderId) ?: throw IllegalStateException("尚未配置 Provider")
+                if (compressConversation(conversation, profile, store.apiKey(profile.id), store.headers(profile.id), app.agentConversationRepository.listMessages(conversation.id))) {
+                    messages = app.agentConversationRepository.listMessages(conversation.id)
+                    refreshConversations()
+                    status = "上下文已压缩"
+                } else status = "当前对话无需压缩"
+            } catch (cancelled: CancellationException) { status = "已停止" }
+            catch (failure: Throwable) { error = failure.message ?: "上下文压缩失败"; status = null }
+            finally { generating = false; job = null }
         }
     }
 
@@ -589,8 +630,11 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
     }
 
     private fun launchGeneration(conversation: AgentConversation, user: AgentMessage, appendUser: Boolean) {
-        error = null; generating = true; liveText = ""; status = "正在准备表盘上下文…"
+        error = null; generating = true; liveText = ""; turnTokens = null; status = "正在准备表盘上下文…"
         job = scope.launch(Dispatchers.IO) {
+            var inputTokens = 0L
+            var outputTokens = 0L
+            var completed = false
             if (appendUser) {
                 app.agentConversationRepository.appendMessage(conversation.id, user)
                 messages = messages + user
@@ -608,7 +652,24 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
                     val first = found.firstOrNull()?.id ?: throw IllegalStateException("Provider 没有可用模型")
                     profile = profile.copy(modelId = first); store.save(profile, store.apiKey(profile.id).orEmpty())
                 }
+                val contextWindow = app.agentSettings.contextWindowOverride ?: profile.contextWindowOverride ?: AgentModelContextResolver.DEFAULT_CONTEXT_WINDOW_TOKENS
+                val stored = app.agentConversationRepository.listMessages(conversation.id)
+                val estimated = stored.sumOf { (it.content.length + it.attachments.sumOf { attachment -> attachment.displayName.length }) / 4L } +
+                    com.ailife.wftools.agent.prompt.WatchAgentPrompt.baseline.length / 4L
+                if (estimated >= (contextWindow * 0.8).toLong()) {
+                    status = "正在压缩上下文…"
+                    try {
+                        if (compressConversation(conversation, profile, store.apiKey(profile.id), store.headers(profile.id), stored)) {
+                            messages = app.agentConversationRepository.listMessages(conversation.id)
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Throwable) {
+                        status = "上下文压缩不可用，继续处理…"
+                    }
+                }
                 val host = DesktopWatchAgentToolHost(doc, preview = DesktopPreviewRenderer(doc)::render, workspace = app.agentWorkspaceManager, watchScope = doc.view.identity)
+                host.syncFaceMirror()
                 val nativeShell = DesktopShellRunner(app.agentWorkspaceManager, BashApprovalStrategy { request -> approvalFor(request) })
                 shellRunner = nativeShell
                 val runner = WatchAgentToolRunner(host,
@@ -619,14 +680,28 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
                     workspaceIdProvider = { app.agentWorkspaceManager.bindingFor(doc.view.identity)?.workspaceId.orEmpty() },
                     bashEnabled = { app.agentSettings.bashMode != AgentBashMode.DENY })
                 val provider = AgentProviderClient()
-                val contextWindow = app.agentSettings.contextWindowOverride ?: profile.contextWindowOverride ?: AgentModelContextResolver.DEFAULT_CONTEXT_WINDOW_TOKENS
                 val loop = WatchAgentLoop(
                     completionExecutor = AgentCompletionExecutor { request, onEvent ->
+                        var requestInputTokens = 0L
+                        var requestOutputTokens = 0L
                         status = "Agent 正在思考…"
                         val prepared = AgentRequestContextReducer.compact(request, contextWindow)
                         AgentContextRetryExecutor.execute(prepared,
                             send = { current -> provider.send(profile!!, store.apiKey(profile.id), current, extraHeaders = store.headers(profile.id), onEvent = { event: AgentStreamEvent ->
                                 if (event is AgentStreamEvent.TextDelta) liveText += event.text
+                                if (event is AgentStreamEvent.Usage) {
+                                    event.input?.let { reported ->
+                                        val next = maxOf(requestInputTokens, reported)
+                                        inputTokens += next - requestInputTokens
+                                        requestInputTokens = next
+                                    }
+                                    event.output?.let { reported ->
+                                        val next = maxOf(requestOutputTokens, reported)
+                                        outputTokens += next - requestOutputTokens
+                                        requestOutputTokens = next
+                                    }
+                                    turnTokens = inputTokens + outputTokens
+                                }
                                 onEvent(event)
                             }) },
                             compress = { current -> liveText = ""; status = "正在压缩上下文后重试…"; AgentRequestContextReducer.compact(current, contextWindow, force = true) },
@@ -643,8 +718,8 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
                     status = "正在调用 ${calls.joinToString { it.name }}…"
                     val assistantTurn = AgentMessage.assistant(conversation.id, content, System.currentTimeMillis()).copy(toolCalls = calls)
                     calls.forEach { toolInputs[it.id] = it.argumentsJson }
-                    app.agentConversationRepository.appendMessage(conversation.id, assistantTurn); messages = messages + assistantTurn
-                    liveText = ""
+                    app.agentConversationRepository.appendMessage(conversation.id, assistantTurn)
+                    Snapshot.withMutableSnapshot { liveText = ""; messages = messages + assistantTurn }
                 }, onToolResults = { results ->
                     results.forEach { result ->
                         val summary = when (val content = result.content) {
@@ -661,16 +736,49 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
                         app.agentConversationRepository.appendMessage(conversation.id, tool); messages = messages + tool
                     }
                 })
-                val assistant = AgentMessage.assistant(conversation.id, completion.text, System.currentTimeMillis())
-                app.agentConversationRepository.appendMessage(conversation.id, assistant); messages = messages + assistant
+                val assistant = AgentMessage.assistant(conversation.id, completion.text, System.currentTimeMillis()).copy(turnTokens = inputTokens + outputTokens)
+                app.agentConversationRepository.appendMessage(conversation.id, assistant)
+                Snapshot.withMutableSnapshot { liveText = ""; messages = messages + assistant }
+                completed = true
                 app.agentConversationRepository.markGeneratedTitlePending(conversation.id)
                 generateConversationTitle(conversation, profile, store.apiKey(profile.id), store.headers(profile.id), user.content, completion.text)
-                liveText = ""; status = "已完成 · revision ${doc.view.revision}"
+                status = "已完成 · revision ${doc.view.revision}"
                 refreshConversations()
-            } catch (cancelled: CancellationException) { liveText = ""; status = "已停止" }
-            catch (failure: Throwable) { error = failure.message ?: "Agent 请求失败"; liveText = ""; status = null }
-            finally { generating = false; job = null; shellRunner = null; resolveBashApproval(false) }
+            } catch (cancelled: CancellationException) {
+                if (!completed && liveText.isNotBlank()) {
+                    val partial = AgentMessage.assistant(conversation.id, liveText, System.currentTimeMillis()).copy(status = AgentMessageStatus.CANCELLED, turnTokens = inputTokens + outputTokens)
+                    app.agentConversationRepository.appendMessage(conversation.id, partial)
+                    Snapshot.withMutableSnapshot { liveText = ""; messages = messages + partial }
+                }
+                liveText = ""; status = "已停止"
+            } catch (failure: Throwable) {
+                if (!completed && liveText.isNotBlank()) {
+                    val partial = AgentMessage.assistant(conversation.id, liveText, System.currentTimeMillis()).copy(status = AgentMessageStatus.FAILED, turnTokens = inputTokens + outputTokens)
+                    app.agentConversationRepository.appendMessage(conversation.id, partial)
+                    Snapshot.withMutableSnapshot { liveText = ""; messages = messages + partial }
+                }
+                error = failure.message ?: "Agent 请求失败"; liveText = ""; status = null
+            } finally {
+                val total = inputTokens + outputTokens
+                if (total > 0L) activeConversation = app.agentConversationRepository.addTokenUsage(conversation.id, total)
+                turnTokens = total.takeIf { it > 0L }
+                refreshConversations()
+                generating = false; job = null; shellRunner = null; resolveBashApproval(false)
+            }
         }
+    }
+
+    private suspend fun compressConversation(
+        conversation: AgentConversation, profile: AiProviderProfile, apiKey: String?, headers: Map<String, String>, history: List<AgentMessage>,
+    ): Boolean {
+        val visible = history.filter { it.content.isNotBlank() && (it.role == AgentMessageRole.USER || it.role == AgentMessageRole.ASSISTANT && it.toolCalls.isEmpty()) }
+        if (visible.size < 2) return false
+        val summary = AgentProviderClient().send(profile.copy(reasoningEffort = null), apiKey,
+            AgentConversationCompressionPrompt.request(visible), extraHeaders = headers).text.trim()
+        if (summary.isBlank()) return false
+        app.agentConversationRepository.replaceMessages(conversation.id,
+            AgentConversationCompressionPrompt.replacement(conversation.id, visible, summary))
+        return true
     }
 
     private fun approvalFor(request: ShellCommandRequest): BashApproval = when (app.agentSettings.bashMode) {

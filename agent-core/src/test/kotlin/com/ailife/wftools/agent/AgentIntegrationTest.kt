@@ -19,6 +19,12 @@ import javax.imageio.ImageIO
 class AgentIntegrationTest {
     @get:Rule val temp = TemporaryFolder()
 
+    @Test fun `responses completion exposes nested token usage`() {
+        val events = AgentStreamParser.events(AiProtocol.RESPONSES,
+            """{"type":"response.completed","response":{"usage":{"input_tokens":120,"output_tokens":33}}}""")
+        assertEquals(AgentStreamEvent.Usage(120, 33), events.filterIsInstance<AgentStreamEvent.Usage>().single())
+    }
+
     @Test fun `fragmented sse and anonymous provider request retain content`() = runBlocking {
         val parser = ChatCompletionsStreamParser()
         val first = "data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n\n"
@@ -175,5 +181,59 @@ class AgentIntegrationTest {
         assertTrue(reduced.messages.first().content.contains("rules"))
         assertEquals("current request", reduced.messages.last().content)
         assertFalse(reduced.messages.any { it.content.startsWith("older") })
+    }
+
+    @Test fun `conversation usage and message replacement survive a new repository instance`() {
+        val root = temp.newFolder("usage-history").toPath()
+        val repository = AgentConversationRepository(root)
+        val conversation = repository.createConversation("face")
+        val first = AgentMessage.user(conversation.id, "first", 1L)
+        repository.appendMessage(conversation.id, first)
+        repository.addTokenUsage(conversation.id, 321L)
+        val replacement = AgentMessage.assistant(conversation.id, "summary", 2L)
+        repository.replaceMessages(conversation.id, listOf(replacement))
+
+        val reopened = AgentConversationRepository(root)
+        assertEquals(321L, reopened.getConversation(conversation.id)?.tokenCount)
+        assertEquals(listOf("summary"), reopened.listMessages(conversation.id).map { it.content })
+    }
+
+    @Test fun `compression request excludes tool payloads and keeps recent visible turns`() {
+        val conversation = AgentConversation.new("face", 1L)
+        val messages = listOf(
+            AgentMessage.user(conversation.id, "画蓝色表盘", 1L),
+            AgentMessage.assistant(conversation.id, "已完成第一步", 2L),
+            AgentMessage("tool", conversation.id, AgentMessageRole.TOOL, "SECRET_COMMAND", 3L),
+            AgentMessage.user(conversation.id, "加上日期", 4L),
+        )
+        val request = AgentConversationCompressionPrompt.request(messages)
+        assertTrue(request.tools.isEmpty())
+        assertFalse(request.stream)
+        assertFalse(request.messages.last().content.contains("SECRET_COMMAND"))
+        val replacement = AgentConversationCompressionPrompt.replacement(conversation.id, messages, "已完成蓝色表盘，待加入日期", 5L)
+        assertTrue(replacement.first().content.startsWith("上下文摘要："))
+        assertEquals("加上日期", replacement.last().content)
+    }
+
+    @Test fun `unknown model context uses flue current conservative default`() {
+        assertEquals(100_000L, AgentModelContextResolver.DEFAULT_CONTEXT_WINDOW_TOKENS)
+    }
+
+    @Test fun `loop unwraps provider argument envelopes and keeps successful writes beside failures`() = runBlocking {
+        val host = InMemoryWatchAgentToolHost("<Watch name=\"A\"><Layers><Layer type=\"text\" text=\"old\"/></Layers></Watch>")
+        var calls = 0
+        val executor = AgentCompletionExecutor { _, onEvent ->
+            calls++
+            val events = if (calls == 1) listOf(
+                AgentStreamEvent.ToolCallDelta("edit", "edit_document", "{\"arguments\":{\"path\":\"watch.xml\",\"old_text\":\"old\",\"new_text\":\"new\",\"expected_revision\":1}}", 0),
+                AgentStreamEvent.ToolCallDelta("bad", "unknown_tool", "{}", 1),
+                AgentStreamEvent.Completed(),
+            ) else listOf(AgentStreamEvent.TextDelta("done"), AgentStreamEvent.Completed())
+            events.forEach(onEvent)
+            AgentCompletion(if (calls == 1) "" else "done", events)
+        }
+        val result = WatchAgentLoop(executor, WatchAgentToolRunner(host)).run(listOf(AgentRequestMessage(AgentMessageRole.USER, "edit")))
+        assertEquals("done", result.text)
+        assertTrue(host.readDocument(WatchAgentReadDocumentRequest(WatchAgentDocumentPath.WATCH_XML)).content.contains("new"))
     }
 }

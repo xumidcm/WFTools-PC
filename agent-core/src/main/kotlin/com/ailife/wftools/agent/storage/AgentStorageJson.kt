@@ -20,13 +20,14 @@ internal object AgentStorageJson {
 
     fun conversations(values: List<AgentConversation>): String = AgentJsonWriter.encode(values.map {
         mapOf("id" to it.id, "watchScope" to it.watchScope, "title" to it.title, "createdAt" to it.createdAt,
-            "updatedAt" to it.updatedAt, "endedAt" to it.endedAt, "titleFinalized" to it.titleFinalized)
+            "updatedAt" to it.updatedAt, "endedAt" to it.endedAt, "titleFinalized" to it.titleFinalized,
+            "tokenCount" to it.tokenCount)
     })
     fun parseConversations(raw: String): List<AgentConversation> = (AgentJsonParser.parse(raw) as? AgentJsonValue.Arr)?.items?.mapNotNull { value ->
         val o = value as? AgentJsonValue.Obj ?: return@mapNotNull null
         AgentConversation(o.string("id") ?: return@mapNotNull null, o.string("watchScope") ?: return@mapNotNull null,
             o.string("title").orEmpty(), o.long("createdAt") ?: 0L, o.long("updatedAt") ?: 0L,
-            o.long("endedAt"), o.bool("titleFinalized") ?: false)
+            o.long("endedAt"), o.bool("titleFinalized") ?: false, o.long("tokenCount") ?: 0L)
     }.orEmpty()
 
     fun messages(values: List<AgentMessage>): String = AgentJsonWriter.encode(values.map { message(it) })
@@ -37,7 +38,8 @@ internal object AgentStorageJson {
         "toolName" to value.toolName, "toolCallId" to value.toolCallId,
         "toolCalls" to value.toolCalls.map { mapOf("id" to it.id, "name" to it.name, "argumentsJson" to it.argumentsJson) },
         "attachments" to value.attachments.map { mapOf("id" to it.id, "displayName" to it.displayName, "mimeType" to it.mimeType, "sizeBytes" to it.sizeBytes, "sha256" to it.sha256, "localPath" to it.localPath) },
-        "reasoningContent" to value.reasoningContent, "toolResultJson" to value.toolResultJson, "toolInputJson" to value.toolInputJson,
+        "reasoningContent" to value.reasoningContent, "thinkingDurationMs" to value.thinkingDurationMs,
+        "turnTokens" to value.turnTokens, "toolResultJson" to value.toolResultJson, "toolInputJson" to value.toolInputJson,
     )
     private fun parseMessage(value: AgentJsonValue): AgentMessage? {
         val o = value as? AgentJsonValue.Obj ?: return null
@@ -53,7 +55,8 @@ internal object AgentStorageJson {
         }
         return AgentMessage(id, conversation, role, o.string("content").orEmpty(), o.long("createdAt") ?: 0L,
             o.string("status")?.let { runCatching { AgentMessageStatus.valueOf(it) }.getOrNull() } ?: AgentMessageStatus.COMPLETE,
-            o.string("toolName"), o.string("toolCallId"), calls, attachments, o.string("reasoningContent"), o.string("toolResultJson"), o.string("toolInputJson"))
+            o.string("toolName"), o.string("toolCallId"), calls, attachments, o.string("reasoningContent"),
+            o.long("thinkingDurationMs"), o.long("turnTokens"), o.string("toolResultJson"), o.string("toolInputJson"))
     }
 
     private fun parseProvider(value: AgentJsonValue): AiProviderProfile? {

@@ -406,6 +406,7 @@ class WatchDocumentStore(val workspaceRoot: Path = defaultWorkspace()) {
             throw WatchDocumentException.SaveFailed("原始表盘工作副本缺失或损坏，无法安全保留原有资源。请恢复工作副本或重新打开源表盘。")
         validateDerivedHashes(derived)
         val removed = session.state.removedAssetKeys()
+        val importedByLower = session.state.importedAssets.entries.associate { it.key.lowercase(Locale.ROOT) to it.value }
         val written = HashSet<String>()
         ZipOutputStream(Files.newOutputStream(target)).use { out ->
             if (Files.isRegularFile(original)) ZipFile(original.toFile()).use { zip ->
@@ -417,6 +418,8 @@ class WatchDocumentStore(val workspaceRoot: Path = defaultWorkspace()) {
                     if (entry.name == session.xmlEntry) out.write(session.state.xml.toByteArray(Charsets.UTF_8))
                     else if (entry.name.equals("scripts/script.txt", true) && session.state.scriptOverride != null)
                         out.write(session.state.scriptOverride!!.toByteArray(Charsets.UTF_8))
+                    else if (entry.name.lowercase(Locale.ROOT) in importedByLower)
+                        writeBlob(session, importedByLower.getValue(entry.name.lowercase(Locale.ROOT)), entry.name, out)
                     else if (entry.name.lowercase(Locale.ROOT) in derived)
                         writeBlob(session, derived.getValue(entry.name.lowercase(Locale.ROOT)), entry.name, out)
                     else if (!entry.isDirectory) zip.getInputStream(entry).use { it.copyTo(out) }
@@ -431,7 +434,7 @@ class WatchDocumentStore(val workspaceRoot: Path = defaultWorkspace()) {
             }
             session.state.importedAssets.forEach { (name, blob) ->
                 if (name.lowercase(Locale.ROOT) in removed) return@forEach
-                if (!written.add(name.lowercase(Locale.ROOT))) throw WatchDocumentException.SaveFailed("资源名冲突：$name")
+                if (!written.add(name.lowercase(Locale.ROOT))) return@forEach
                 validateArchiveName(name)
                 val blobPath = session.home.resolve("blobs").resolve(blob)
                 if (!Files.isRegularFile(blobPath) || hashFile(blobPath) != blob)
@@ -589,10 +592,12 @@ class WatchDocumentStore(val workspaceRoot: Path = defaultWorkspace()) {
             }
             state.removedAssets.orEmpty().forEach { name ->
                 validateArchiveName(name)
-                if (!name.contains('/') || name.substringBefore('/').lowercase(Locale.ROOT) !in MATERIAL_FOLDERS)
+                if (!name.contains('/') && name.substringAfterLast('.', "").lowercase(Locale.ROOT) !in ROOT_IMAGE_EXTENSIONS ||
+                    name.contains('/') && name.substringBefore('/').lowercase(Locale.ROOT) !in MATERIAL_FOLDERS)
                     throw WatchDocumentException.RecoveryFailed("草稿包含不允许删除的非素材路径：$name")
             }
         }
-        internal val MATERIAL_FOLDERS = setOf("images", "videos", "fonts", "fonts_bm", "sfx", "sounds")
+        internal val MATERIAL_FOLDERS = setOf("images", "videos", "fonts", "fonts_bm", "sfx", "sounds", "audio", "shaders", "scripts", "assets")
+        private val ROOT_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "avif")
     }
 }

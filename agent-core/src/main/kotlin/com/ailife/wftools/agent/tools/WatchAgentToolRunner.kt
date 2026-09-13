@@ -22,7 +22,7 @@ class WatchAgentToolRunner(
     val toolContracts: List<WatchAgentToolContract>
         get() {
             val permissions = currentPermissions()
-            return (WatchAgentToolContracts.all + WatchAgentToolContracts.mirror + WatchAgentToolContracts.external).filter { permissions.allows(it.access) &&
+            return (WatchAgentToolContracts.all + WatchAgentToolContracts.mirror + WatchAgentToolContracts.external).filter { it.name != WatchAgentToolName.COMMIT_FACE_MIRROR && permissions.allows(it.access) &&
                 (workspaceImages != null || it.name !in setOf(WatchAgentToolName.LIST_WORKSPACE_FILES, WatchAgentToolName.READ_IMAGE)) &&
                 (bashEnabled() && shellRunner?.capability(workspaceIdProvider())?.bashAvailable == true || it.name != WatchAgentToolName.RUN_COMMAND) &&
                 (externalTools?.imageGenerationAvailable == true || it.name != WatchAgentToolName.GENERATE_IMAGE) &&
@@ -42,7 +42,8 @@ class WatchAgentToolRunner(
         val undoGroup = if (manageUndoGroup) beginRequestUndoGroup() else null
         return try {
             val results = scheduler.execute(calls)
-            if (results.any { !it.succeeded }) undoGroup?.rollback() else undoGroup?.commit()
+            if (results.any { it.succeeded && WatchAgentToolName.fromWireName(it.name)?.isWrite == true }) undoGroup?.commit()
+            else undoGroup?.rollback()
             results
         } catch (error: Throwable) {
             runCatching { undoGroup?.rollback() }
@@ -89,14 +90,18 @@ class WatchAgentToolRunner(
                         failure(call, "workspace_not_found", "工作区 ${result.workspaceId} 不存在或未绑定当前表盘")
                     is com.ailife.wftools.agent.workspace.ShellRunResult.RuntimeUnavailable ->
                         failure(call, "runtime_unavailable", "工作区 ${result.workspaceId} 的命令运行时不可用，请检查本机 PowerShell/Bash 能力")
-                    is com.ailife.wftools.agent.workspace.ShellRunResult.Completed ->
-                        success(call, host.currentRevision, mapOf(
-                            "command" to command,
-                            "stdout" to result.stdout,
-                            "exit_code" to result.exitCode,
-                            "truncated" to result.truncated,
-                            "run_id" to result.runId,
-                        ))
+                    is com.ailife.wftools.agent.workspace.ShellRunResult.Completed -> {
+                        val sync = runCatching { host.commitFaceMirror(host.currentRevision) }
+                        success(call, host.currentRevision, buildMap {
+                            put("command", command)
+                            put("stdout", result.stdout)
+                            put("exit_code", result.exitCode)
+                            put("truncated", result.truncated)
+                            put("run_id", result.runId)
+                            sync.getOrNull()?.let { put("face_mirror", it) }
+                            sync.exceptionOrNull()?.let { put("face_mirror_sync_error", it.message ?: it.javaClass.simpleName) }
+                        })
+                    }
                     is com.ailife.wftools.agent.workspace.ShellRunResult.DryRun ->
                         success(call, host.currentRevision, mapOf(
                             "command" to command,

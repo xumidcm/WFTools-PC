@@ -74,7 +74,7 @@ class UrlConnectionAgentHttpTransport : AgentHttpTransport {
                     if (continuation.isActive) continuation.resumeWithException(error)
                 }
             }.apply {
-                name = "flue-agent-provider"
+                name = "wftools-agent-provider"
                 isDaemon = true
             }
             continuation.invokeOnCancellation {

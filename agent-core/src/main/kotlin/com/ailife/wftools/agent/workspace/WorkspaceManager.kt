@@ -373,22 +373,44 @@ class WorkspaceManager private constructor(
     fun faceMirrorDirectory(workspaceId: String): Path? =
         get(workspaceId)?.paths?.face?.also { Files.createDirectories(it) }
 
-    /** Atomically refreshes the face mirror documents used by Bash tooling. */
+    /** Replaces the complete face mirror with one validated workspace snapshot. */
     @Synchronized
-    fun syncFaceMirror(workspaceId: String, watchXml: String, globalScript: String): Boolean {
+    fun syncFaceMirror(workspaceId: String, watchXml: String, globalScript: String, resources: Map<String, ByteArray> = emptyMap()): Boolean {
         val workspace = get(workspaceId) ?: return false
+        val root = workspace.paths.root
         val face = workspace.paths.face
-        val xmlTarget = face.resolve("watch.xml")
-        val scriptTarget = face.resolve("scripts/script.txt")
-        val oldBytes = listOf(xmlTarget, scriptTarget).sumOf { if (Files.isRegularFile(it)) Files.size(it) else 0L }
-        val newBytes = watchXml.toByteArray(Charsets.UTF_8).size.toLong() + globalScript.toByteArray(Charsets.UTF_8).size
-        require(calculateUsage(workspace.paths.root) - oldBytes + newBytes <= workspace.quota.limitBytes) { "表盘镜像超出工作区配额" }
-        Files.createDirectories(face)
-        writeAtomically(face.resolve("watch.xml"), watchXml)
-        val scripts = face.resolve("scripts"); Files.createDirectories(scripts)
-        writeAtomically(scripts.resolve("script.txt"), globalScript)
-        refreshQuota(workspaceId)
-        return true
+        val entries = linkedMapOf("watch.xml" to watchXml.toByteArray(Charsets.UTF_8), "scripts/script.txt" to globalScript.toByteArray(Charsets.UTF_8))
+        resources.forEach { (path, bytes) ->
+            val clean = WorkspacePathPolicy.sanitizeRelative(path)
+            require(clean == path && clean != "watch.xml" && clean != "scripts/script.txt" && !clean.startsWith("face/")) { "表盘镜像资源路径无效：$path" }
+            require(bytes.size <= 256 * 1024 * 1024) { "表盘镜像资源过大：$path" }
+            entries[clean] = bytes
+        }
+        require(entries.values.sumOf { it.size.toLong() } <= 1024L * 1024 * 1024) { "表盘镜像总量超过限制" }
+        val oldFaceBytes = if (Files.isDirectory(face)) calculateUsage(face) else 0L
+        require(calculateUsage(root) - oldFaceBytes + entries.values.sumOf { it.size.toLong() } <= workspace.quota.limitBytes) { "表盘镜像超出工作区配额" }
+        val staging = Files.createTempDirectory(root, ".face-sync-")
+        val backup = root.resolve(".face-backup-${UUID.randomUUID()}")
+        var backedUp = false
+        var published = false
+        try {
+            entries.forEach { (path, bytes) ->
+                val target = WorkspacePathPolicy.resolveInside(staging, path)
+                Files.createDirectories(target.parent)
+                Files.write(target, bytes)
+            }
+            if (Files.exists(face)) { moveAtomically(face, backup); backedUp = true }
+            try { moveAtomically(staging, face); published = true }
+            catch (error: Throwable) {
+                if (backedUp) moveAtomically(backup, face)
+                throw error
+            }
+            return true
+        } finally {
+            if (!published && Files.exists(staging)) deleteRecursively(staging)
+            if (published && backedUp && Files.exists(backup)) deleteRecursively(backup)
+            if (published) refreshQuota(workspaceId)
+        }
     }
 
     /** Imports an archive into a new UUID after validating every entry as a relative path. */

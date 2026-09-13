@@ -189,9 +189,10 @@ class DocumentController private constructor(
     fun refreshFromPreview() = task("", block = {})
     /** Publish an Agent transaction before it releases the editor write barrier. */
     fun refreshFromAgent() {
+        val preserveScriptDraft = hasGlobalScriptDraft
         val next = withAgentSession { snapshot(session, view, refreshAssets = true) }
         view = next
-        if (!hasGlobalScriptDraft) globalScriptDraft = next.project.globalScript
+        if (!preserveScriptDraft) globalScriptDraft = next.project.globalScript
     }
     /** Shares the document mutex with normal editor commands. Agent calls originate off the UI thread. */
     fun <T> withAgentSession(block: () -> T): T = runBlocking { mutex.withLock { withContext(Dispatchers.IO) { block() } } }

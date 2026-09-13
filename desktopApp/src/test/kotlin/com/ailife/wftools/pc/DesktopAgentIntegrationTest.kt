@@ -141,9 +141,9 @@ class DesktopAgentIntegrationTest {
 
             val undo = host.beginUndoGroup()
             try {
-                host.editDocument(WatchAgentEditDocumentRequest(WatchAgentDocumentPath.WATCH_XML, "新建表盘", "Agent 验收", revision))
-                val candidate = host.readDocument(WatchAgentReadDocumentRequest(WatchAgentDocumentPath.WATCH_XML, revision)).content
-                host.writeDocument(WatchAgentWriteDocumentRequest(WatchAgentDocumentPath.WATCH_XML, candidate.replace("Agent 验收", "Agent 验收完成"), revision))
+                val first = host.editDocument(WatchAgentEditDocumentRequest(WatchAgentDocumentPath.WATCH_XML, "新建表盘", "Agent 验收", revision))
+                val candidate = host.readDocument(WatchAgentReadDocumentRequest(WatchAgentDocumentPath.WATCH_XML, first.revision)).content
+                host.writeDocument(WatchAgentWriteDocumentRequest(WatchAgentDocumentPath.WATCH_XML, candidate.replace("Agent 验收", "Agent 验收完成"), first.revision))
                 undo.commit()
             } catch (failure: Throwable) {
                 undo.rollback()
@@ -167,6 +167,39 @@ class DesktopAgentIntegrationTest {
             doc.render.close()
             session.close()
             scope.cancel()
+        }
+    }
+
+    @Test fun `face mirror changes update draft while stale mirror cannot overwrite newer editor revision`() {
+        val store = WatchDocumentStore(temp.newFolder("mirror-host-work").toPath())
+        val session = store.newDocument("Original")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val doc = runBlocking { DocumentController.create(session, store, scope, EditorPreferences(temp.newFolder("mirror-host-prefs").toPath())) }
+        try {
+            val manager = WorkspaceManager(temp.newFolder("mirror-host-agent").toPath())
+            val workspace = manager.create("镜像工作区", watchScope = doc.view.identity)
+            val host = DesktopWatchAgentToolHost(doc, workspace = manager, watchScope = doc.view.identity)
+            host.syncFaceMirror()
+            val mirror = workspace.paths.face
+            val unchangedRevision = host.currentRevision
+            val unchanged = host.commitFaceMirror(unchangedRevision) as Map<*, *>
+            assertEquals(false, unchanged["committed"])
+            assertEquals("no_changes", unchanged["skipped"])
+            assertEquals(unchangedRevision, host.currentRevision)
+            Files.writeString(mirror.resolve("watch.xml"), Files.readString(mirror.resolve("watch.xml")).replace("Original", "From Shell"))
+            val result = host.commitFaceMirror(host.currentRevision) as Map<*, *>
+            assertEquals("From Shell", doc.view.title)
+            assertEquals(true, result["committed"])
+
+            val oldXml = Files.readString(mirror.resolve("watch.xml"))
+            doc.withAgentSession { doc.session.replaceAgentDocument("watch.xml", oldXml.replace("From Shell", "Newer Editor"), host.currentRevision) }
+            doc.refreshFromAgent()
+            Files.writeString(mirror.resolve("watch.xml"), oldXml)
+            val stale = host.commitFaceMirror(host.currentRevision) as Map<*, *>
+            assertEquals("Newer Editor", doc.view.title)
+            assertEquals("stale_mirror", stale["skipped"])
+        } finally {
+            doc.render.close(); session.close(); scope.cancel()
         }
     }
 }

@@ -28,6 +28,8 @@ internal object WatchClipboard {
     fun prepareDeletion(session: DocumentSession, requested: String): Pair<String, String> = guarded("无法删除素材") {
         val path = requested.replace('\\', '/')
         WatchDocumentStore.validateArchiveName(path)
+        if (path.equals("scripts/script.txt", true))
+            fail("全局脚本由脚本编辑器管理，不能作为普通素材删除。")
         if (!path.contains('/') || path.substringBefore('/').lowercase(Locale.ROOT) !in WatchDocumentStore.MATERIAL_FOLDERS)
             fail("只能删除素材目录中的文件；watch.xml、脚本、预览和文档元数据禁止删除。")
         Inventory(session).use { inventory ->

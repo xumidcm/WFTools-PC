@@ -18,6 +18,10 @@ data class AgentMessage(
     val toolCalls: List<AgentToolCallRecord> = emptyList(),
     val attachments: List<AgentAttachment> = emptyList(),
     val reasoningContent: String? = null,
+    /** Measured provider thinking phase; null while the turn is still active. */
+    val thinkingDurationMs: Long? = null,
+    /** Total provider input and output tokens for the completed user turn. */
+    val turnTokens: Long? = null,
     /** Full tool payload for provider continuity; the UI displays [content] instead. */
     val toolResultJson: String? = null,
     /** Arguments sent to a tool, retained so the desktop card can show the exact operation. */
@@ -55,6 +59,7 @@ data class AgentConversation(
     val updatedAt: Long,
     val endedAt: Long? = null,
     val titleFinalized: Boolean = false,
+    val tokenCount: Long = 0L,
 ) {
     companion object {
         private const val LEGACY_UNTITLED_TITLE = "新会话"
@@ -94,7 +99,7 @@ data class AgentFeatureSettings(
     val searchEndpoint: String? = null,
 )
 
-enum class AgentGenerationStatus { THINKING, CALLING_TOOL, PROCESSING_PREVIEW, PROCESSING_FOLLOW_UP }
+enum class AgentGenerationStatus { THINKING, CALLING_TOOL, PROCESSING_PREVIEW, PROCESSING_FOLLOW_UP, COMPRESSING }
 
 data class WatchAgentUiState(
     val watchScope: String,
@@ -108,6 +113,8 @@ data class WatchAgentUiState(
     val pendingFollowUp: String? = null,
     val inputTokens: Long? = null,
     val outputTokens: Long? = null,
+    val turnTokens: Long? = null,
+    val conversationTokens: Long = 0L,
     val generationStatus: AgentGenerationStatus? = null,
     val attachments: List<AgentAttachment> = emptyList(),
     val editingMessageId: String? = null,

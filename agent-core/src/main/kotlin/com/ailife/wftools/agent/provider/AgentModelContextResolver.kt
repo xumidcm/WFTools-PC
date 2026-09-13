@@ -6,7 +6,7 @@ import com.ailife.wftools.agent.model.ModelMetadataSource
 
 /** Applies the documented precedence for the context window shown to the user. */
 object AgentModelContextResolver {
-    const val DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000L
+    const val DEFAULT_CONTEXT_WINDOW_TOKENS = 100_000L
 
     fun contextWindow(profile: AiProviderProfile, descriptor: AiModelDescriptor): Long =
         profile.contextWindowOverride

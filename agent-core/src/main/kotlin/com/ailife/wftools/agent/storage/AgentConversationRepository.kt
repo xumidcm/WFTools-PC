@@ -30,6 +30,20 @@ class AgentConversationRepository(private val root: Path) {
         if (!Files.isRegularFile(file)) return emptyList()
         return runCatching { AgentStorageJson.parseMessages(Files.readString(file)) }.getOrDefault(emptyList())
     }
+    @Synchronized fun replaceMessages(conversationId: String, replacement: List<AgentMessage>) {
+        val conversation = requireNotNull(getConversation(conversationId))
+        require(replacement.all { it.conversationId == conversationId }) { "消息不属于当前会话" }
+        writeJson(messagesFile(conversationId, conversation.watchScope), replacement)
+        writeConversations(conversation.watchScope, listConversations(conversation.watchScope)
+            .filterNot { it.id == conversationId } + conversation.copy(updatedAt = System.currentTimeMillis()))
+    }
+    @Synchronized fun addTokenUsage(conversationId: String, delta: Long): AgentConversation {
+        val conversation = requireNotNull(getConversation(conversationId))
+        if (delta <= 0L) return conversation
+        val updated = conversation.copy(tokenCount = Math.addExact(conversation.tokenCount, delta))
+        writeConversations(conversation.watchScope, listConversations(conversation.watchScope).filterNot { it.id == conversationId } + updated)
+        return updated
+    }
     @Synchronized fun appendMessage(conversationId: String, message: AgentMessage): AgentMessage {
         val conversation = requireNotNull(getConversation(conversationId))
         require(message.conversationId == conversationId)
@@ -82,6 +96,10 @@ class AgentConversationRepository(private val root: Path) {
     @Synchronized fun markEnded(id: String, now: Long = System.currentTimeMillis()) {
         val current = getConversation(id) ?: return
         writeConversations(current.watchScope, listConversations(current.watchScope).filterNot { it.id == id } + current.copy(endedAt = now, updatedAt = now))
+    }
+    @Synchronized fun markResumed(id: String, now: Long = System.currentTimeMillis()) {
+        val current = getConversation(id) ?: return
+        writeConversations(current.watchScope, listConversations(current.watchScope).filterNot { it.id == id } + current.copy(endedAt = null, updatedAt = now))
     }
     @Synchronized fun addImageAttachment(conversationId: String, source: Path): AgentAttachment {
         AgentImageInput.fromFile(source)

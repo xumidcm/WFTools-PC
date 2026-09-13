@@ -307,7 +307,7 @@ internal fun performFileAssociationAction(
                     }
                 }
             }
-            OutlinedTextField(contextWindow, { contextWindow = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), label = { Text("上下文窗口 Token · 200K 默认值") }, singleLine = true)
+            OutlinedTextField(contextWindow, { contextWindow = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), label = { Text("上下文窗口 Token · 100K 默认值") }, singleLine = true)
             Row(horizontalArrangement=Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Button(enabled=!providerBusy,onClick={
                     providerBusy=true; providerMessage=null

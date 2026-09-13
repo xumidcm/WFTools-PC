@@ -71,7 +71,7 @@ object AgentStreamParser {
                 }
             }
         }
-        root.obj("usage")?.let { usage ->
+        (root.obj("usage") ?: if (protocol == AiProtocol.RESPONSES) root.obj("response")?.obj("usage") else null)?.let { usage ->
             val input = usage.long("input_tokens") ?: usage.long("prompt_tokens")
             val output = usage.long("output_tokens") ?: usage.long("completion_tokens")
             if (input != null || output != null) result += AgentStreamEvent.Usage(input, output)

@@ -39,3 +39,11 @@ No completion is inferred from compilation alone. Track remaining limits and con
 - 主样本原件仍保持 SHA256 `CBD60DC582F1BF7216D6A33D91FDE5BF9DD3D9A6F9259114819FD162E511DD7F`，所有测试使用副本，样本和截图不提交 Git。
 
 下一步：对当前工作区做最终代码审查和窄窗口人工视觉复核；若要验证 MSI 安装、升级、卸载及真实“打开方式”注册，需要在可回退的 Windows 用户环境中逐案确认后执行。当前不把静态 MSI 表检查当成安装行为证明。
+
+## 2026-09-13：同步 Flue Agent 实时编辑框架
+
+- 以 Flue `53ef091c` 为迁移输入，Flue 工作区保持只读。桌面端同步了工具参数包装兼容、成功写入保留、命令后的 `face/` 自动回写、完整资源镜像、会话上下文压缩和 token 记录。
+- 表盘 XML、全局脚本与资源变更共同进入一个 Agent 撤销点；镜像未变化时不制造草稿版本，镜像过期时不覆盖用户的新编辑。全局脚本现在校验编译、顶层执行及首次时钟回调；普通素材删除仍保护 `scripts/script.txt`。
+- 右栏显示会话 token 与手动压缩入口；流式消息转为历史消息时在一个 Compose 快照内更新，自动跟随长消息底部。
+- Windows 原生四模块测试共 375 项：370 通过、5 项按需跳过、0 失败。桌面 UI 全套在一次 30 秒时序超时后，单项与全套重跑均通过。尚未把构建、打包结果等同于真实在线 Provider 或人工输入验收。
+- Windows `createDistributable` 与 Linux x64 隔离 `createDistributable` 均成功。Windows 便携 ZIP SHA-256 `96609F8A851284F2A6C58127FADB235E553333F2805E18D135177336D4886D20`，MSI SHA-256 `04BEB20499864F5E7008B92483805704AC67B2D9467B7866F90DCE6678459BBD`；Linux 便携 tar.gz SHA-256 `5F3789D17980C488CC49D57410F4E55A79EF4FB372F77523C700333D819E1161`，DEB SHA-256 `C2AA8C028C664689D6D5D59072CDB27BE2B3EB373A871658E97174810B4B504B`。两个平台的包内均确认包含新 `agent-core`；Windows MSI 只做静态验证，未实际安装。

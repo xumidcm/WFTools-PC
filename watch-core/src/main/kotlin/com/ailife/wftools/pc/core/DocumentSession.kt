@@ -33,6 +33,7 @@ class DocumentSession internal constructor(
     internal var snapshotGcCommits = 0
     private var closed = false
     private var inTransaction = false
+    private var agentUndoGroupActive = false
     @Volatile var revision: Long = 0L
         internal set
     /** Nonfatal failure after a successful source save; the editor may display this separately. */
@@ -80,15 +81,87 @@ class DocumentSession internal constructor(
 
     fun beginAgentUndoGroup(): AgentUndoGroup {
         ensureOpen()
+        check(!inTransaction && !agentUndoGroupActive) { "已有文档事务正在执行" }
+        agentUndoGroupActive = true
         val previous = state
-        check(!inTransaction) { "已有文档事务正在执行" }
-        inTransaction = true
-        return AgentUndoGroup { commit ->
-            val next = state
-            state = previous
-            inTransaction = false
-            if (commit) this.commit(next)
+        val previousUndo = undoStack.toList()
+        val previousRedo = redoStack.toList()
+        return AgentUndoGroup { keep ->
+            try {
+                if (keep) {
+                    if (state !== previous) {
+                        undoStack.clear()
+                        undoStack.addAll(previousUndo.takeLast(49))
+                        undoStack.addLast(previous)
+                        store.persist(this)
+                    }
+                } else if (state !== previous) {
+                    val current = state
+                    materializeAssets(previous, current)
+                    state = previous
+                    revision++
+                    undoStack.clear(); undoStack.addAll(previousUndo)
+                    redoStack.clear(); redoStack.addAll(previousRedo)
+                    store.persist(this)
+                }
+            } finally {
+                agentUndoGroupActive = false
+            }
         }
+    }
+
+    /** Applies a validated face mirror as a live editor draft mutation. */
+    fun restoreAgentMirror(watchXml: String, globalScript: String, resources: Map<String, ByteArray>): AgentDocumentCandidate {
+        ensureOpen()
+        val parsed = WatchXml.parse(watchXml)
+        WatchXml.validate(parsed)
+        val scriptError = validateAgentGlobalScript(globalScript)
+        require(scriptError == null) { "全局脚本无法编译：$scriptError" }
+        val desired = resources.mapKeys { (path, _) ->
+            WatchDocumentStore.validateArchiveName(path)
+            require(path != xmlEntry && !path.equals("scripts/script.txt", true)) { "镜像资源不能覆盖编辑器文档" }
+            path
+        }
+        require(desired.values.all { it.size <= 256 * 1024 * 1024 }) { "镜像资源超过单文件限制" }
+        require(desired.values.sumOf { it.size.toLong() } <= 1024L * 1024 * 1024) { "镜像资源总量超过限制" }
+        val currentPaths = Files.walk(workDir).use { paths ->
+            paths.filter(Files::isRegularFile).map { workDir.relativize(it).toString().replace('\\', '/') }
+                .filter { it != xmlEntry && !it.equals("scripts/script.txt", true) }
+                .toList().toSet()
+        }
+        val oldLayers = WatchXml.layers(document())
+        val newLayers = WatchXml.layers(parsed)
+        val oldIds = state.layerIds
+        val used = mutableSetOf<String>()
+        val newIds = newLayers.mapIndexed { index, layer ->
+            val explicit = layer.getAttribute("id").takeIf(String::isNotBlank)
+            val oldIndex = oldLayers.indices.firstOrNull { old -> oldIds[old] !in used && explicit != null && oldLayers[old].getAttribute("id") == explicit }
+                ?: oldLayers.indices.firstOrNull { old -> oldIds[old] !in used && WatchXml.serialize(oldLayers[old]) == WatchXml.serialize(layer) }
+                ?: index.takeIf { newLayers.size == oldLayers.size && oldIds.getOrNull(it) !in used }
+            (oldIndex?.let(oldIds::get) ?: UUID.randomUUID().toString()).also(used::add)
+        }
+        val imported = state.importedAssets.toMutableMap()
+        val removed = state.removedAssets.orEmpty().toMutableSet()
+        desired.forEach { (path, bytes) ->
+            val current = workDir.resolve(path)
+            if (!Files.isRegularFile(current) || !Files.readAllBytes(current).contentEquals(bytes)) {
+                imported[path] = store.stageBlob(home, bytes)
+            }
+            removed.remove(path)
+        }
+        (currentPaths - desired.keys).filter(::isMirrorResource).forEach { path ->
+            // Keep a blob backup so one Undo can restore a deleted original file.
+            if (path !in imported) imported[path] = store.stageBlob(home, Files.readAllBytes(workDir.resolve(path)))
+            removed.add(path)
+        }
+        val selected = selection.selected.intersect(newIds.toSet())
+        commit(state.copy(
+            xml = WatchXml.serialize(parsed), layerIds = newIds,
+            selection = LayerSelection(selected, selection.primary?.takeIf { it in selected }, selection.anchor?.takeIf { it in selected }),
+            importedAssets = imported, removedAssets = removed,
+            scriptOverride = if (globalScript == agentCandidate().globalScript) state.scriptOverride else globalScript,
+        ))
+        return agentCandidate()
     }
 
     fun editAgentDocument(path: String, oldText: String, newText: String, expectedRevision: Long): AgentDocumentCandidate {
@@ -123,7 +196,7 @@ class DocumentSession internal constructor(
                     selection = LayerSelection(selected, selection.primary?.takeIf { it in selected }, selection.anchor?.takeIf { it in selected })))
             }
             "scripts/script.txt" -> {
-                val error = if (content.isBlank()) null else runCatching { com.ailife.wftools2.domain.editor.watchmaker.WmScriptRuntime().validateScript(content) }.getOrElse { it.message ?: "脚本无法编译" }
+                val error = runCatching { validateAgentGlobalScript(content) }.getOrElse { it.message ?: "脚本无法执行" }
                 require(error == null) { "全局脚本无法编译：$error" }
                 commit(state.copy(scriptOverride = content))
             }
@@ -477,6 +550,7 @@ class DocumentSession internal constructor(
         val toRemove = (previousVisible.keys - visible.keys).filterNot { name -> name in changed } +
             (if (fullVerification) snapshot.removedAssets.orEmpty() else snapshot.removedAssets.orEmpty().filter { it.lowercase(Locale.ROOT) !in previousRemoved })
         toRemove.distinct().forEach { name ->
+            if (name.lowercase(Locale.ROOT) !in removed && restoreOriginalAsset(name)) return@forEach
             Files.deleteIfExists(workingAssetPath(name))
         }
         if (fullVerification || snapshot.scriptOverride != previous.scriptOverride) {
@@ -570,6 +644,28 @@ class DocumentSession internal constructor(
             Files.copy(from, temp, StandardCopyOption.REPLACE_EXISTING)
             Files.move(temp, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
         } finally { runCatching { Files.deleteIfExists(temp) } }
+    }
+
+    private fun restoreOriginalAsset(name: String): Boolean {
+        val archive = home.resolve("original.zip")
+        if (!Files.isRegularFile(archive)) return false
+        ZipFile(archive.toFile()).use { zip ->
+            val entry = zip.entries().asSequence().firstOrNull { it.name.equals(name, true) && !it.isDirectory } ?: return false
+            val destination = workingAssetPath(name)
+            Files.createDirectories(destination.parent)
+            val temp = Files.createTempFile(destination.parent, ".original-", ".tmp")
+            try {
+                zip.getInputStream(entry).use { input -> Files.copy(input, temp, StandardCopyOption.REPLACE_EXISTING) }
+                Files.move(temp, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } finally { Files.deleteIfExists(temp) }
+            return true
+        }
+    }
+
+    private fun isMirrorResource(path: String): Boolean {
+        val folder = path.substringBefore('/', "").lowercase(Locale.ROOT)
+        val rootImage = '/' !in path && path.substringAfterLast('.', "").lowercase(Locale.ROOT) in setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "avif")
+        return folder in WatchDocumentStore.MATERIAL_FOLDERS || folder in setOf("audio", "shaders", "scripts", "assets") || rootImage
     }
 
     private fun originalScript(): ByteArray? {

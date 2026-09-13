@@ -6,6 +6,7 @@ import com.ailife.wftools.pc.core.*
 import java.nio.file.Files
 import java.io.ByteArrayInputStream
 import java.nio.file.Path
+import java.nio.file.LinkOption
 import javax.xml.parsers.DocumentBuilderFactory
 import com.ailife.wftools.agent.workspace.ImportResult
 import com.ailife.wftools.agent.workspace.WorkspacePathPolicy
@@ -22,6 +23,7 @@ class DesktopWatchAgentToolHost(
     private val workspace: WorkspaceManager? = null,
     private val watchScope: String = doc.view.identity,
 ) : WatchAgentToolHost, WatchAgentUndoHost {
+    @Volatile private var lastSyncedRevision: Long? = null
     override val currentRevision: Long get() = doc.session.revision
 
     override fun inspectFace(request: WatchAgentInspectFaceRequest): WatchAgentInspectFaceResult = doc.withAgentSession {
@@ -42,34 +44,40 @@ class DesktopWatchAgentToolHost(
         val candidate = doc.session.agentCandidate()
         val diagnostics = mutableListOf<WatchAgentDiagnostic>()
         runCatching { validateXml(candidate.watchXml) }.onFailure { diagnostics += WatchAgentDiagnostic(WatchAgentDiagnosticSeverity.ERROR, "invalid_xml", it.message ?: "watch.xml 无法解析") }
-        val scriptError = if (candidate.globalScript.isBlank()) null else runCatching { com.ailife.wftools2.domain.editor.watchmaker.WmScriptRuntime().validateScript(candidate.globalScript) }.getOrElse { it.message ?: "脚本无法编译" }
+        val scriptError = runCatching { validateAgentGlobalScript(candidate.globalScript) }.getOrElse { it.message ?: "脚本无法执行" }
         if (scriptError != null) diagnostics += WatchAgentDiagnostic(WatchAgentDiagnosticSeverity.ERROR, "invalid_global_script", scriptError)
         WatchAgentValidationResult(currentRevision, diagnostics)
     }
     override fun previewFace(request: WatchAgentPreviewRequest): WatchAgentPreviewResult = preview?.invoke(request) ?: WatchAgentPreviewResult(currentRevision, request.target, "desktop", available = false)
     override fun editDocument(request: WatchAgentEditDocumentRequest): WatchAgentDocumentMutationResult {
         val candidate = doc.withAgentSession { doc.session.editAgentDocument(request.path.wirePath, request.oldText, request.newText, request.expectedRevision) }
+        doc.refreshFromAgent()
+        runCatching { syncFaceMirror() }
         return WatchAgentDocumentMutationResult(request.path, candidate.revision, if (request.path == WatchAgentDocumentPath.WATCH_XML) candidate.watchXml else candidate.globalScript)
     }
     override fun writeDocument(request: WatchAgentWriteDocumentRequest): WatchAgentDocumentMutationResult {
         val candidate = doc.withAgentSession { doc.session.replaceAgentDocument(request.path.wirePath, request.content, request.expectedRevision) }
+        doc.refreshFromAgent()
+        runCatching { syncFaceMirror() }
         return WatchAgentDocumentMutationResult(request.path, candidate.revision, if (request.path == WatchAgentDocumentPath.WATCH_XML) candidate.watchXml else candidate.globalScript)
     }
     override fun syncFaceMirror(): Any {
         val manager = workspace ?: throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定工作区")
         val id = manager.bindingFor(watchScope)?.workspaceId ?: throw WatchAgentToolException("mirror_unavailable", "当前表盘未绑定工作区")
-        val candidate = doc.withAgentSession { doc.session.agentCandidate() }; check(manager.syncFaceMirror(id, candidate.watchXml, candidate.globalScript))
-        doc.withAgentSession {
-            Files.walk(doc.session.workDir).use { files -> files.filter(Files::isRegularFile).forEach { source ->
+        val (candidate, resources) = doc.withAgentSession {
+            val candidate = doc.session.agentCandidate()
+            val resources = linkedMapOf<String, ByteArray>()
+            Files.walk(doc.session.workDir).use { files -> files.filter { Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }.forEach { source ->
                 val relative = doc.session.workDir.relativize(source).toString().replace('\\', '/')
                 if (relative != "watch.xml" && relative != "scripts/script.txt") {
-                    val result = manager.importFile(id, source, "face/$relative")
-                    check(result == ImportResult.IMPORTED) { "表盘素材镜像失败：$relative（$result）" }
+                    resources[relative] = Files.readAllBytes(source)
                 }
             } }
+            candidate to resources
         }
-        manager.refreshQuota(id)
-        return mapOf("workspace_id" to id, "revision" to currentRevision, "path" to "face/")
+        check(manager.syncFaceMirror(id, candidate.watchXml, candidate.globalScript, resources)) { "表盘镜像同步失败" }
+        lastSyncedRevision = candidate.revision
+        return mapOf("workspace_id" to id, "revision" to candidate.revision, "path" to "face/", "resources" to resources.keys.sorted())
     }
     override fun validateFaceMirror(): Any {
         val face = boundFaceMirror()
@@ -77,20 +85,46 @@ class DesktopWatchAgentToolHost(
         val script = Files.readString(face.resolve("scripts/script.txt"))
         val problems = mutableListOf<String>()
         runCatching { validateXml(xml) }.onFailure { problems += it.message ?: "watch.xml 无法解析" }
-        val scriptError = if (script.isBlank()) null else runCatching { com.ailife.wftools2.domain.editor.watchmaker.WmScriptRuntime().validateScript(script) }.getOrElse { it.message ?: "脚本无法编译" }
+        val scriptError = runCatching { validateAgentGlobalScript(script) }.getOrElse { it.message ?: "脚本无法执行" }
         if (scriptError != null) problems += scriptError
         return mapOf("valid" to problems.isEmpty(), "diagnostics" to problems, "revision" to currentRevision)
     }
     override fun commitFaceMirror(expectedRevision: Long): Any {
+        checkRevision(expectedRevision)
+        if (lastSyncedRevision != currentRevision) {
+            syncFaceMirror()
+            return mapOf("committed" to false, "skipped" to "stale_mirror", "revision" to currentRevision)
+        }
         val face = boundFaceMirror()
         val xml = Files.readString(face.resolve("watch.xml"))
         val script = Files.readString(face.resolve("scripts/script.txt"))
+        val resources = linkedMapOf<String, ByteArray>()
+        Files.walk(face).use { files -> files.filter { Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }.forEach { source ->
+            val relative = face.relativize(source).toString().replace('\\', '/')
+            if (relative != "watch.xml" && relative != "scripts/script.txt") {
+                resources[relative] = Files.readAllBytes(source)
+            }
+        } }
+        val unchanged = doc.withAgentSession {
+            val current = doc.session.agentCandidate()
+            if (current.watchXml != xml || current.globalScript != script) false
+            else {
+                val currentResources = linkedMapOf<String, ByteArray>()
+                Files.walk(doc.session.workDir).use { files -> files.filter { Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }.forEach { source ->
+                    val relative = doc.session.workDir.relativize(source).toString().replace('\\', '/')
+                    if (relative != "watch.xml" && relative != "scripts/script.txt") currentResources[relative] = Files.readAllBytes(source)
+                } }
+                currentResources.keys == resources.keys && resources.all { (path, bytes) -> currentResources[path]?.contentEquals(bytes) == true }
+            }
+        }
+        if (unchanged) return mapOf("committed" to false, "skipped" to "no_changes", "revision" to currentRevision)
         val candidate = doc.withAgentSession {
             checkRevision(expectedRevision)
-            doc.session.replaceAgentDocument("watch.xml", xml, expectedRevision)
-            doc.session.replaceAgentDocument("scripts/script.txt", script, expectedRevision)
+            doc.session.restoreAgentMirror(xml, script, resources)
         }
-        return mapOf("revision" to candidate.revision, "path" to "face/")
+        doc.refreshFromAgent()
+        syncFaceMirror()
+        return mapOf("committed" to true, "revision" to candidate.revision, "path" to "face/", "resources" to resources.keys.sorted())
     }
     override fun importFaceResource(path: String): Any {
         val manager = workspace ?: throw WatchAgentToolException("workspace_required", "未绑定工作区")
@@ -114,6 +148,7 @@ class DesktopWatchAgentToolHost(
             // Publish the new asset immediately so the layer list, preview and
             // subsequent Agent turns all observe the same document snapshot.
             doc.refreshFromAgent()
+            runCatching { syncFaceMirror() }
             mapOf(
                 "imported" to path,
                 "resource_path" to imported.singleOrNull(),

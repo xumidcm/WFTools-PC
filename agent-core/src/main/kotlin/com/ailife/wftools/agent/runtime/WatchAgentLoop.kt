@@ -88,7 +88,8 @@ class WatchAgentLoop(
                 val results = toolRunner.execute(calls, manageUndoGroup = false)
                 currentCoroutineContext().ensureActive()
                 if (results.any { !it.succeeded }) {
-                    transaction?.rollback()
+                    // A failed operation cannot undo earlier successful edits in this turn.
+                    transaction?.commit()
                     transaction = null
                 }
                 onToolResults(results)
@@ -136,7 +137,7 @@ class WatchAgentLoop(
             }
             throw IllegalStateException("Agent 工具循环超过 $maxTurns 轮，已停止以避免重复调用")
         } catch (error: Throwable) {
-            transaction?.rollback()
+            transaction?.commit()
             throw error
         }
     }
@@ -179,9 +180,15 @@ class WatchAgentLoop(
     }
 
     private fun parseArguments(json: String): Map<String, Any?> {
-        val root = com.ailife.wftools.agent.provider.AgentJsonParser.parse(json)
+        var root = com.ailife.wftools.agent.provider.AgentJsonParser.parse(json)
             as? com.ailife.wftools.agent.provider.AgentJsonValue.Obj
             ?: throw IllegalArgumentException("工具参数必须是 JSON 对象")
+        repeat(2) {
+            val wrapper = root.fields.keys.singleOrNull()
+            if (wrapper in setOf("arguments", "input", "parameters")) {
+                root = root.fields[wrapper] as? com.ailife.wftools.agent.provider.AgentJsonValue.Obj ?: return@repeat
+            }
+        }
         return root.fields.mapValues { (_, value) -> value.toKotlinValue() }
     }
 
