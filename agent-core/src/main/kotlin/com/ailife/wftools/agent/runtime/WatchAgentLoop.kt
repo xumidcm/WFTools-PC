@@ -37,9 +37,10 @@ fun interface AgentCompletionExecutor {
 class WatchAgentLoop(
     private val completionExecutor: AgentCompletionExecutor,
     private val toolRunner: WatchAgentToolRunner,
-    private val maxTurns: Int = DEFAULT_MAX_TURNS,
+    private val maxTurns: Int? = DEFAULT_MAX_TURNS,
     private val acceptsImages: Boolean = true,
 ) {
+    init { require(maxTurns == null || maxTurns > 0) { "maxTurns 必须为正数或 null" } }
     suspend fun run(
         initialMessages: List<AgentRequestMessage>,
         onEvent: (AgentStreamEvent) -> Unit = {},
@@ -55,7 +56,8 @@ class WatchAgentLoop(
         var lastFailureSignature: String? = null
         var repeatedFailureCount = 0
         try {
-            repeat(maxTurns) { turn ->
+            var turn = 0
+            while (maxTurns == null || turn < maxTurns) {
                 currentCoroutineContext().ensureActive()
                 if (turn > 0) onBeforeNextTurn()?.let(messages::add)
                 val completion = completionExecutor.complete(
@@ -134,6 +136,7 @@ class WatchAgentLoop(
                         images = images.map { it.second },
                     )
                 }
+                turn++
             }
             throw IllegalStateException("Agent 工具循环超过 $maxTurns 轮，已停止以避免重复调用")
         } catch (error: Throwable) {
@@ -269,8 +272,8 @@ class WatchAgentLoop(
     }
 
     companion object {
-        /** Maximum provider/tool exchange rounds in one user request. */
-        const val DEFAULT_MAX_TURNS = 50
+        /** Null means unlimited provider/tool exchange rounds for one request. */
+        val DEFAULT_MAX_TURNS: Int? = null
     }
 
     private fun imageResult(result: WatchAgentToolResult): com.ailife.wftools.agent.provider.AgentRequestImage? = when (val value = result.content) {

@@ -236,4 +236,48 @@ class AgentIntegrationTest {
         assertEquals("done", result.text)
         assertTrue(host.readDocument(WatchAgentReadDocumentRequest(WatchAgentDocumentPath.WATCH_XML)).content.contains("new"))
     }
+
+    @Test fun `default loop has no fixed round limit`() = runBlocking {
+        val host = InMemoryWatchAgentToolHost("<Watch name=\"A\"><Layers/></Watch>")
+        var rounds = 0
+        val executor = AgentCompletionExecutor { _, onEvent ->
+            rounds++
+            if (rounds <= 51) {
+                val events = listOf(
+                    AgentStreamEvent.ToolCallDelta("inspect-$rounds", "inspect_face", "{}", 0),
+                    AgentStreamEvent.Completed(),
+                )
+                events.forEach(onEvent)
+                AgentCompletion("", events)
+            } else {
+                val events = listOf(AgentStreamEvent.TextDelta("完成"), AgentStreamEvent.Completed())
+                events.forEach(onEvent)
+                AgentCompletion("完成", events)
+            }
+        }
+        val result = WatchAgentLoop(executor, WatchAgentToolRunner(host)).run(
+            listOf(AgentRequestMessage(AgentMessageRole.USER, "继续")),
+        )
+        assertEquals(52, rounds)
+        assertEquals("完成", result.text)
+    }
+
+    @Test fun `run command performs a host bash mirror preflight`() = runBlocking {
+        val delegate = InMemoryWatchAgentToolHost("<Watch name=\"A\"><Layers/></Watch>")
+        val host = object : WatchAgentToolHost by delegate {
+            var preflights = 0
+            override fun prepareBashMirror() { preflights++ }
+        }
+        val shell = object : com.ailife.wftools.agent.workspace.ProotShellRunner {
+            override fun run(request: com.ailife.wftools.agent.workspace.ShellCommandRequest) =
+                com.ailife.wftools.agent.workspace.ShellRunResult.Completed(request.runId.orEmpty(), 0, "ok", false)
+            override fun cancel(runId: String) = false
+            override fun capability(workspaceId: String) = com.ailife.wftools.agent.workspace.WorkspaceCapability(workspaceId, true, true, false, com.ailife.wftools.agent.workspace.CapabilityReason.READY)
+        }
+        val result = WatchAgentToolRunner(host, shellRunner = shell, workspaceId = "test").execute(
+            WatchAgentToolCall("run", "run_command", mapOf("command" to "echo ok")),
+        )
+        assertTrue(result.succeeded)
+        assertEquals(1, host.preflights)
+    }
 }

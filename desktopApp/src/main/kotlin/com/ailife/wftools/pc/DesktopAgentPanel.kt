@@ -2,11 +2,18 @@ package com.ailife.wftools.pc
 
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -36,6 +43,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.ailife.wftools.agent.model.*
 import com.ailife.wftools.agent.provider.*
 import com.ailife.wftools.agent.runtime.*
@@ -77,6 +85,7 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
     var renameDraft by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<AgentConversation?>(null) }
     val listState = rememberLazyListState()
+    val scrollScope = rememberCoroutineScope()
     var inputHeight by remember { mutableStateOf(86.dp) }
     // Keep following a live response only while the user is at the end of the
     // stream.  Checking only the last visible item is insufficient: a long
@@ -84,6 +93,21 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
     // it, which used to trigger an auto-scroll on every text delta and make the
     // list feel stuck.
     var followOutput by remember { mutableStateOf(true) }
+    var autoScrollInProgress by remember { mutableStateOf(false) }
+    val nearBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()
+            !listState.canScrollForward || (last?.index == info.totalItemsCount - 1 &&
+                last.offset + last.size <= info.viewportEndOffset + 48)
+        }
+    }
+    fun sendAgentMessage() {
+        // Sending a new user turn is an explicit request to follow the newest
+        // output, even when the reader had previously scrolled through history.
+        followOutput = true
+        viewModel.send()
+    }
     LaunchedEffect(listState) {
         snapshotFlow {
             val info = listState.layoutInfo
@@ -91,26 +115,38 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
             val atBottom = info.totalItemsCount == 0 || (last != null && last.index == info.totalItemsCount - 1 && last.offset + last.size <= info.viewportEndOffset + 24)
             listState.isScrollInProgress to atBottom
         }.collect { (scrolling, atBottom) ->
-            // Only an active scroll gesture is allowed to change this flag.
-            // Content growth often settles the list at the bottom for a frame;
-            // treating that as user intent re-enabled auto-follow while the
-            // wheel was still moving and pulled the viewport back.
-            if (scrolling) followOutput = nextAgentFollowOutput(followOutput, userScrollInProgress = true, atBottom)
+            // Only an active user scroll can pause following. During our own
+            // correction the list reports transient positions; those must not
+            // pull the viewport back.
+            if (scrolling && !autoScrollInProgress && !atBottom) followOutput = false
         }
     }
-    LaunchedEffect(viewModel.messages.size, viewModel.liveText) {
-        if (!followOutput || listState.isScrollInProgress) return@LaunchedEffect
-        // Wait for the new message/text height to be laid out, then use an
-        // immediate scroll.  This avoids an animation competing with wheel
-        // input while the provider is still streaming.
-        withFrameNanos { }
-        val count = listState.layoutInfo.totalItemsCount
-        if (count > 0) {
+    suspend fun scrollToAgentEnd(animated: Boolean) {
+        if (autoScrollInProgress) return
+        autoScrollInProgress = true
+        try {
+            val count = listState.layoutInfo.totalItemsCount
+            if (count == 0) return
+            // A bubble can be taller than the viewport. Reveal its item first,
+            // then consume the remaining distance to its bottom.
+            if (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index != count - 1) listState.scrollToItem(count - 1)
             val layout = listState.layoutInfo
             val last = layout.visibleItemsInfo.lastOrNull { it.index == count - 1 }
-            val viewportHeight = layout.viewportEndOffset - layout.viewportStartOffset
-            listState.scrollToItem(count - 1, (last?.size?.minus(viewportHeight) ?: 0).coerceAtLeast(0))
+            val remaining = last?.let { (it.offset.toLong() + it.size - layout.viewportEndOffset).coerceAtLeast(0L).toFloat() } ?: 0f
+            if (remaining > 0f) {
+                if (animated) listState.animateScrollBy(remaining) else listState.scrollBy(remaining)
+            }
+            followOutput = true
+        } finally {
+            autoScrollInProgress = false
         }
+    }
+    LaunchedEffect(viewModel.messages.size, viewModel.liveText, viewModel.generating) {
+        if (!followOutput || listState.isScrollInProgress) return@LaunchedEffect
+        // Wait for the new message/text height to be laid out before correcting
+        // the viewport, matching Flue's stable bottom-follow behavior.
+        withFrameNanos { }
+        scrollToAgentEnd(animated = false)
     }
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).testTag("agent-panel")) {
         Surface(tonalElevation = 2.dp, color = MaterialTheme.colorScheme.surfaceContainer) {
@@ -170,10 +206,12 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 Modifier.fillMaxSize().padding(start = 10.dp, end = 18.dp)
-                    .onPointerEvent(PointerEventType.Scroll) { followOutput = false },
+                    .onPointerEvent(PointerEventType.Scroll) {
+                        if (!autoScrollInProgress && !nearBottom) followOutput = false
+                    },
                 state = listState,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(vertical = 12.dp),
+                contentPadding = PaddingValues(top = 12.dp, bottom = 64.dp),
             ) {
                 if (viewModel.messages.isEmpty() && viewModel.liveText.isBlank()) item {
                     Text("描述你想修改的表盘内容。Agent 会先读取 revision，再验证 XML、脚本和预览。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
@@ -185,6 +223,25 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
                 if (viewModel.liveText.isNotBlank()) item(key = "streaming") { AgentMessageBubble(AgentMessage("streaming", viewModel.activeConversation?.id.orEmpty(), AgentMessageRole.ASSISTANT, viewModel.liveText, System.currentTimeMillis(), AgentMessageStatus.STREAMING)) }
             }
             VerticalScrollbar(rememberScrollbarAdapter(listState), Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical = 4.dp).width(8.dp), style = desktopScrollbarStyle())
+            androidx.compose.animation.AnimatedVisibility(
+                visible = shouldShowAgentReturnToBottom(nearBottom, listState.layoutInfo.totalItemsCount > 0),
+                modifier = Modifier.align(Alignment.BottomCenter).zIndex(2f),
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut(),
+            ) {
+                Surface(
+                    tonalElevation = 4.dp,
+                    shape = MaterialTheme.shapes.extraLarge,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.clickable { scrollScope.launch { scrollToAgentEnd(animated = true) } },
+                ) {
+                    Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.ArrowDownward, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(5.dp))
+                        Text("回到底部", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
         }
         viewModel.error?.let { Text(it, Modifier.fillMaxWidth().padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         if (!viewModel.generating && (viewModel.error != null || viewModel.status == "已停止")) TextButton(onClick = { viewModel.retry() }, modifier = Modifier.padding(horizontal = 8.dp)) { Icon(Icons.Default.Refresh, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text("重试上一条") }
@@ -199,9 +256,9 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
                         if (state.hasFocus) doc.focus = EditorFocus.TEXT else if (doc.focus == EditorFocus.TEXT) doc.focus = EditorFocus.OTHER
                     }.onPreviewKeyEvent { event ->
                         if (event.type == KeyEventType.KeyDown && event.isCtrlPressed && event.key == Key.V && viewModel.pasteClipboardImage()) true
-                        else if (event.key == Key.Enter && !event.isShiftPressed && event.type in setOf(KeyEventType.KeyDown, KeyEventType.KeyUp)) { viewModel.send(); true } else false
+                        else if (event.key == Key.Enter && !event.isShiftPressed && event.type in setOf(KeyEventType.KeyDown, KeyEventType.KeyUp)) { sendAgentMessage(); true } else false
                     }.onKeyEvent { event ->
-                        if (event.key == Key.Enter && !event.isShiftPressed && event.type in setOf(KeyEventType.KeyDown, KeyEventType.KeyUp)) { viewModel.send(); true } else false
+                        if (event.key == Key.Enter && !event.isShiftPressed && event.type in setOf(KeyEventType.KeyDown, KeyEventType.KeyUp)) { sendAgentMessage(); true } else false
                     }, placeholder = { Text("告诉 Agent 你要做什么…") }, maxLines = 12)
                     Box(
                         Modifier.align(Alignment.BottomEnd).size(22.dp)
@@ -242,7 +299,7 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
                     }
                     Spacer(Modifier.weight(1f))
                     if (viewModel.generating) FilledTonalButton(onClick = viewModel::stop) { Icon(Icons.Default.Stop, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("停止") }
-                    else FilledTonalButton(enabled = viewModel.draft.isNotBlank() || viewModel.pendingAttachments.isNotEmpty(), onClick = viewModel::send, modifier = Modifier.testTag("agent-send")) { Icon(Icons.Default.Send, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("发送") }
+                    else FilledTonalButton(enabled = viewModel.draft.isNotBlank() || viewModel.pendingAttachments.isNotEmpty(), onClick = { sendAgentMessage() }, modifier = Modifier.testTag("agent-send")) { Icon(Icons.Default.Send, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("发送") }
                 }
             }
         }
@@ -252,13 +309,15 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
     if (showSettings) HomeSettingsDialog(app, theme, onTheme, app.canvasInput, { app.canvasInput = it }, onDismiss = { showSettings = false }, initialPage = 1)
 }
 
-/** Keep provider tool-turn records, but paint only one copy of repeated prose. */
+/** Keep provider tool-turn records while collapsing tool-only assistant turns. */
 internal fun visibleAgentMessages(messages: List<AgentMessage>, liveText: String, generating: Boolean): List<AgentMessage> {
-    // A provider tool turn is persisted for protocol continuity, but its prose
-    // is represented by the compact tool-result banner below. Do not dedupe by
-    // text: two separate answers are allowed to have identical content.
-    return messages.filterNot { it.role == AgentMessageRole.ASSISTANT && it.toolCalls.isNotEmpty() }
+    // A tool-only provider turn is represented by the compact tool banner. If
+    // the model wrote prose before calling the tool, preserve that assistant
+    // bubble so the conversation never appears to lose its previous sentence.
+    return messages.filterNot { it.role == AgentMessageRole.ASSISTANT && it.toolCalls.isNotEmpty() && it.content.isBlank() }
 }
+
+internal fun shouldShowAgentReturnToBottom(nearBottom: Boolean, hasItems: Boolean): Boolean = hasItems && !nearBottom
 
 internal fun nextAgentFollowOutput(current: Boolean, userScrollInProgress: Boolean, atBottom: Boolean): Boolean =
     if (userScrollInProgress) atBottom else current

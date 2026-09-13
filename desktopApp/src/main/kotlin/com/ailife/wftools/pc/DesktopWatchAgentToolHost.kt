@@ -79,6 +79,16 @@ class DesktopWatchAgentToolHost(
         lastSyncedRevision = candidate.revision
         return mapOf("workspace_id" to id, "revision" to candidate.revision, "path" to "face/", "resources" to resources.keys.sorted())
     }
+    override fun prepareBashMirror() {
+        // Bash edits the face mirror in place. Refresh immediately before each
+        // command so editor changes made while the model was thinking become
+        // the baseline, while an older mirror can never overwrite them.
+        val manager = workspace ?: return
+        if (manager.bindingFor(watchScope) == null) return
+        runCatching { syncFaceMirror() }.getOrElse { failure ->
+            throw WatchAgentToolException("mirror_unavailable", "无法在命令执行前同步表盘镜像：${failure.message ?: "同步失败"}", failure)
+        }
+    }
     override fun validateFaceMirror(): Any {
         val face = boundFaceMirror()
         val xml = Files.readString(face.resolve("watch.xml"))

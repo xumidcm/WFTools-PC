@@ -15,6 +15,9 @@ interface WatchAgentToolHost {
     fun writeDocument(request: WatchAgentWriteDocumentRequest): WatchAgentDocumentMutationResult
 
     fun syncFaceMirror(): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")
+    /** Refreshes the editor-to-face/ baseline immediately before a shell command.
+     * Hosts without a bound workspace intentionally keep this as a no-op. */
+    fun prepareBashMirror() = Unit
     fun validateFaceMirror(): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")
     fun commitFaceMirror(expectedRevision: Long): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")
     fun importFaceResource(path: String): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")

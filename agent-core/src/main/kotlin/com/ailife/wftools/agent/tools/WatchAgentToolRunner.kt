@@ -76,6 +76,11 @@ class WatchAgentToolRunner(
             WatchAgentToolName.RUN_COMMAND -> {
                 val runner = requireNotNull(shellRunner) { "工作区命令运行器尚未初始化" }
                 val command = call.requiredString("command")
+                // The editor may have changed while the provider was thinking.
+                // Establish a fresh baseline before the command touches face/;
+                // otherwise post-command sync can mistake a stale mirror for
+                // the command's result and roll the editor backwards.
+                host.prepareBashMirror()
                 val result = runner.run(ShellCommandRequest(
                     workspaceId = workspaceIdProvider(),
                     command = command,

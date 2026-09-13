@@ -27,7 +27,7 @@ import kotlinx.coroutines.withTimeout
 
 class AgentCoreContractTest {
     @Test fun `watch agent allows up to fifty provider tool rounds`() {
-        assertEquals(50, WatchAgentLoop.DEFAULT_MAX_TURNS)
+        assertNull(WatchAgentLoop.DEFAULT_MAX_TURNS)
     }
 
     @Test fun `feature settings default to disabled and conversations are scoped`() {

@@ -77,15 +77,17 @@ class EditorLogicTest {
         assertTrue(documentPasteOwnsFocus(EditorFocus.LAYERS))
         assertFalse(documentPasteOwnsFocus(EditorFocus.TEXT))
     }
-    @Test fun `tool turns are represented only by compact tool banners while final text stays visible`() {
+    @Test fun `assistant prose before a tool stays visible while empty tool turns stay compact`() {
         val user = AgentMessage.user("c", "画一个图", 1L)
         val earlier = AgentMessage.assistant("c", "上一轮内容", 2L).copy(toolCalls = listOf(AgentToolCallRecord("a", "inspect_face", "{}")))
-        val current = AgentMessage.assistant("c", "可以生成图片", 3L).copy(toolCalls = listOf(AgentToolCallRecord("b", "generate_image", "{}")))
-        val streaming = visibleAgentMessages(listOf(user, earlier, current), "可以生成图片", true)
-        assertEquals(listOf(user.id), streaming.map { it.id })
-        val final = AgentMessage.assistant("c", "可以生成图片", 4L)
+        val emptyToolTurn = AgentMessage.assistant("c", "", 3L).copy(toolCalls = listOf(AgentToolCallRecord("b", "generate_image", "{}")))
+        val streaming = visibleAgentMessages(listOf(user, earlier, emptyToolTurn), "", true)
+        assertEquals(listOf(user.id, earlier.id), streaming.map { it.id })
+        val current = AgentMessage.assistant("c", "可以生成图片", 4L).copy(toolCalls = listOf(AgentToolCallRecord("c", "generate_image", "{}")))
+        assertEquals(listOf(user.id, earlier.id, current.id), visibleAgentMessages(listOf(user, earlier, current), "", true).map { it.id })
+        val final = AgentMessage.assistant("c", "可以生成图片", 5L)
         val completed = visibleAgentMessages(listOf(user, earlier, current, final), "", false)
-        assertEquals(listOf(user.id, final.id), completed.map { it.id })
+        assertEquals(listOf(user.id, earlier.id, current.id, final.id), completed.map { it.id })
     }
 
     @Test fun `same assistant text in separate completed turns is never hidden`() {
@@ -98,6 +100,12 @@ class EditorLogicTest {
         assertFalse(nextAgentFollowOutput(true, userScrollInProgress = true, atBottom = false))
         assertTrue(nextAgentFollowOutput(false, userScrollInProgress = true, atBottom = true))
         assertFalse(nextAgentFollowOutput(false, userScrollInProgress = false, atBottom = true))
+    }
+
+    @Test fun `return to bottom is shown only when the message stream is away from the bottom`() {
+        assertTrue(shouldShowAgentReturnToBottom(nearBottom = false, hasItems = true))
+        assertFalse(shouldShowAgentReturnToBottom(nearBottom = true, hasItems = true))
+        assertFalse(shouldShowAgentReturnToBottom(nearBottom = false, hasItems = false))
     }
 
     @Test fun `atlas pages and sounds cannot be applied as fonts or image paths`() {

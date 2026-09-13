@@ -202,4 +202,26 @@ class DesktopAgentIntegrationTest {
             doc.render.close(); session.close(); scope.cancel()
         }
     }
+
+    @Test fun `bash preflight refreshes the face mirror after an editor-side change`() {
+        val store = WatchDocumentStore(temp.newFolder("bash-preflight-work").toPath())
+        val session = store.newDocument("Before")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val doc = runBlocking { DocumentController.create(session, store, scope, EditorPreferences(temp.newFolder("bash-preflight-prefs").toPath())) }
+        try {
+            val manager = WorkspaceManager(temp.newFolder("bash-preflight-agent").toPath())
+            val workspace = manager.create("Bash 前置同步", watchScope = doc.view.identity)
+            val host = DesktopWatchAgentToolHost(doc, workspace = manager, watchScope = doc.view.identity)
+            host.syncFaceMirror()
+            val revision = host.currentRevision
+            val xml = host.readDocument(WatchAgentReadDocumentRequest(WatchAgentDocumentPath.WATCH_XML, revision)).content
+            doc.withAgentSession { doc.session.replaceAgentDocument("watch.xml", xml.replace("Before", "Edited"), revision) }
+            doc.refreshFromAgent()
+            Files.writeString(workspace.paths.face.resolve("watch.xml"), "<Watch name=\"stale\"><Layers/></Watch>")
+            host.prepareBashMirror()
+            assertTrue(Files.readString(workspace.paths.face.resolve("watch.xml")).contains("Edited"))
+        } finally {
+            doc.render.close(); session.close(); scope.cancel()
+        }
+    }
 }
