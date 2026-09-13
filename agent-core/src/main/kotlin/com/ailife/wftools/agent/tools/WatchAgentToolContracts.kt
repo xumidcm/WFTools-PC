@@ -21,7 +21,9 @@ enum class WatchAgentToolName(
     COMMIT_FACE_MIRROR("commit_face_mirror", WatchAgentToolAccess.WRITE),
     IMPORT_FACE_RESOURCE("import_face_resource", WatchAgentToolAccess.WRITE),
     GENERATE_IMAGE("generate_image", WatchAgentToolAccess.WRITE),
+    EDIT_IMAGE("edit_image", WatchAgentToolAccess.WRITE),
     SEARCH_WEB("search_web", WatchAgentToolAccess.READ_ONLY),
+    SCRAPE_PAGE("scrape_page", WatchAgentToolAccess.READ_ONLY),
     ;
 
     val isReadOnly: Boolean get() = access == WatchAgentToolAccess.READ_ONLY
@@ -124,8 +126,38 @@ object WatchAgentToolContracts {
         WatchAgentToolContract(WatchAgentToolName.IMPORT_FACE_RESOURCE, "导入工作区表盘资源；path 可直接使用 workspace/、generated/ 或 home/ 中的文件，不需要先移动到 images/。桌面宿主会把 Agent 生成的 SVG 自动转换为 PNG，并在结果中返回 resource_path 供 image 图层使用。", listOf(WatchAgentToolParameter("path", "string", true))),
     )
     val external: List<WatchAgentToolContract> = listOf(
-        WatchAgentToolContract(WatchAgentToolName.GENERATE_IMAGE, "使用已配置的图片接口生成表盘素材，结果保存在工作区 generated/。", listOf(WatchAgentToolParameter("prompt", "string", true))),
+        WatchAgentToolContract(
+            WatchAgentToolName.GENERATE_IMAGE,
+            "调用 OpenAI 兼容图片接口生成表盘素材，结果保存在工作区 generated/。可以自行选择模型、尺寸、质量、透明背景和输出格式；size 支持 auto 或 WIDTHxHEIGHT（宽高为 16 的倍数）。",
+            listOf(
+                WatchAgentToolParameter("prompt", "string", true),
+                WatchAgentToolParameter("model", "string"),
+                WatchAgentToolParameter("size", "string", enumValues = emptyList()),
+                WatchAgentToolParameter("quality", "string", enumValues = listOf("auto", "low", "medium", "high", "xhigh", "max")),
+                WatchAgentToolParameter("background", "string", enumValues = listOf("auto", "transparent", "opaque")),
+                WatchAgentToolParameter("output_format", "string", enumValues = listOf("png", "webp", "jpeg")),
+                WatchAgentToolParameter("output_compression", "integer"),
+                WatchAgentToolParameter("moderation", "string", enumValues = listOf("auto", "low")),
+            ),
+        ),
+        WatchAgentToolContract(
+            WatchAgentToolName.EDIT_IMAGE,
+            "调用 OpenAI 兼容图片编辑接口修改表盘或工作区里的图片。path 可来自 inspect_face、list_workspace_files 或当前表盘素材，结果保存在 generated/；size 支持 auto 或 WIDTHxHEIGHT（宽高为 16 的倍数）。",
+            listOf(
+                WatchAgentToolParameter("path", "string", true),
+                WatchAgentToolParameter("prompt", "string", true),
+                WatchAgentToolParameter("mask_path", "string"),
+                WatchAgentToolParameter("model", "string"),
+                WatchAgentToolParameter("size", "string", enumValues = emptyList()),
+                WatchAgentToolParameter("quality", "string", enumValues = listOf("auto", "low", "medium", "high", "xhigh", "max")),
+                WatchAgentToolParameter("background", "string", enumValues = listOf("auto", "transparent", "opaque")),
+                WatchAgentToolParameter("output_format", "string", enumValues = listOf("png", "webp", "jpeg")),
+                WatchAgentToolParameter("output_compression", "integer"),
+                WatchAgentToolParameter("input_fidelity", "string", enumValues = listOf("low", "high")),
+            ),
+        ),
         WatchAgentToolContract(WatchAgentToolName.SEARCH_WEB, "使用已配置的搜索接口查找外部资料，返回标题、链接和摘要。", listOf(WatchAgentToolParameter("query", "string", true))),
+        WatchAgentToolContract(WatchAgentToolName.SCRAPE_PAGE, "抓取指定 HTTP(S) 网页的正文和标题，供 Agent 阅读页面内容。", listOf(WatchAgentToolParameter("url", "string", true))),
     )
 
     fun find(name: String): WatchAgentToolContract? =

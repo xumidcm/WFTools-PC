@@ -33,6 +33,29 @@ fun fileManagerRevealCommand(path:Path,os:DesktopOperatingSystem=desktopOperatin
     }
 }
 
+/** Opens a directory itself, used by the Agent workspace settings. */
+fun fileManagerOpenCommand(path: Path, os: DesktopOperatingSystem = desktopOperatingSystem()): List<String> {
+    val absolute = path.normalize()
+    return when (os) {
+        DesktopOperatingSystem.WINDOWS -> listOf("explorer.exe", absolute.toString())
+        DesktopOperatingSystem.LINUX -> listOf("gio", "open", absolute.toString())
+        DesktopOperatingSystem.MACOS -> listOf("open", absolute.toString())
+        DesktopOperatingSystem.OTHER -> listOf("xdg-open", absolute.toString())
+    }
+}
+
+fun fileManagerOpenLabel(os: DesktopOperatingSystem = desktopOperatingSystem()): String = when (os) {
+    DesktopOperatingSystem.WINDOWS -> "在资源管理器中打开"
+    DesktopOperatingSystem.LINUX -> "在文件管理器中打开"
+    DesktopOperatingSystem.MACOS -> "在 Finder 中打开"
+    DesktopOperatingSystem.OTHER -> "打开目录"
+}
+
+fun openDirectoryInFileManager(path: Path) {
+    require(Files.isDirectory(path)) { "工作区目录不存在：$path" }
+    ProcessBuilder(fileManagerOpenCommand(path)).start()
+}
+
 fun showInFileManager(path:Path) {
     ProcessBuilder(fileManagerRevealCommand(path)).start()
 }

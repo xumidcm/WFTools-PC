@@ -53,6 +53,7 @@ fun canvasDragPans(
     button: CanvasDragButton,
     mode: CanvasOperationMode,
     selection: Set<String>,
+    hitId: String? = null,
     middleButtonPanEnabled: Boolean = true,
     rightButtonPanEnabled: Boolean = true,
     spaceDown: Boolean = false,
@@ -60,7 +61,7 @@ fun canvasDragPans(
 ): Boolean = when (button) {
     CanvasDragButton.TERTIARY -> middleButtonPanEnabled
     CanvasDragButton.SECONDARY -> rightButtonPanEnabled
-    CanvasDragButton.PRIMARY -> spaceDown || ctrlPrimary || (mode == CanvasOperationMode.SELECT_THEN_DRAG && selection.isEmpty())
+    CanvasDragButton.PRIMARY -> spaceDown || ctrlPrimary || (mode == CanvasOperationMode.SELECT_THEN_DRAG && selection.isEmpty() && hitId == null)
 }
 
 fun isCanvasPanGesture(tertiaryPressed: Boolean, spaceDown: Boolean, ctrlPrimary: Boolean): Boolean =

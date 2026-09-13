@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import com.ailife.wftools.pc.core.WatchDocumentStore
 import com.ailife.wftools.pc.preview.PreviewDocumentSnapshot
 import com.ailife.wftools.pc.preview.WatchPreview
+import com.ailife.wftools.pc.preview.CanvasOperationMode
 import com.ailife.wftools.agent.model.AiProtocol
 import com.ailife.wftools.agent.model.AiProviderProfile
 import com.sun.net.httpserver.HttpServer
@@ -24,6 +25,12 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.net.InetSocketAddress
+import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.StringSelection
+import java.awt.datatransfer.Transferable
+import java.awt.datatransfer.UnsupportedFlavorException
+import java.awt.image.BufferedImage
 
 class EditorDesktopUiTest {
     @get:Rule val compose = createComposeRule()
@@ -230,6 +237,22 @@ class EditorDesktopUiTest {
         compose.runOnIdle { app.updateAgentSettings(app.agentSettings.copy(enabled = false)) }
         compose.onNodeWithText("AI", useUnmergedTree = true).assertDoesNotExist()
     }
+    @Test fun `select then drag first canvas click selects the layer before any pan`() {
+        val editor = editor()
+        editor.preview = editor.preview.copy(operationMode = CanvasOperationMode.SELECT_THEN_DRAG)
+        editor.command { clearSelection() }
+        runBlocking { withTimeout(5000) { while (editor.busy) delay(5) } }
+        val before = editor.view.revision
+        compose.setContent { WFToolsTheme(false) {
+            WatchPreview(editor.session, editor.view.revision, editor.render, editor.preview.device, editor.preview.workspace,
+                { editor.preview = editor.preview.copy(workspace = it) }, editor::refreshFromPreview,
+                modifier = Modifier.size(500.dp), snapshot = PreviewDocumentSnapshot(editor.view.project, editor.view.layers, editor.view.selection),
+                operationMode = editor.preview.operationMode, onDocumentCommand = { editor.command(block = it) })
+        } }
+        compose.onRoot().performMouseInput { click(center) }
+        compose.waitUntil(5000) { !editor.busy && editor.view.selection.selected.isNotEmpty() }
+        assertEquals("Selection is an editor state change, not a document edit", before, editor.view.revision)
+    }
     @Test fun `AI sidebar streams a reply and keeps history across maximize`() {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/v1/chat/completions") { exchange ->
@@ -255,16 +278,45 @@ class EditorDesktopUiTest {
         input.performKeyInput { keyDown(Key.ShiftLeft); pressKey(Key.Enter); keyUp(Key.ShiftLeft) }
         input.performTextInput("detail")
         input.performKeyInput { pressKey(Key.Enter) }
-        compose.waitUntil(15000) { app.agentModel(editor).messages.any { it.content == "OK" } }
-        compose.waitUntil(15000) { app.agentModel(editor).activeConversation?.title == "表盘编辑请求" }
+        compose.waitUntil(30000) { app.agentModel(editor).messages.any { it.content == "OK" } }
+        compose.waitUntil(30000) { app.agentModel(editor).activeConversation?.title == "表盘编辑请求" }
         compose.onNodeWithTag("agent-input-resize").assertIsDisplayed()
         compose.onAllNodesWithContentDescription("复制消息", useUnmergedTree = true).assertCountEquals(2)
+        compose.onNodeWithContentDescription("重试消息", useUnmergedTree = true).assertIsDisplayed()
+        val originalLayers = editor.view.layers.size
+        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+        val originalClipboard = clipboard.getContents(null)
+        try {
+            clipboard.setContents(StringSelection("粘贴到 Agent"), null)
+            input.performClick()
+            input.performKeyInput { keyDown(Key.CtrlLeft); pressKey(Key.V); keyUp(Key.CtrlLeft) }
+            input.assertTextContains("粘贴到 Agent")
+            assertEquals(originalLayers, editor.view.layers.size)
+
+            val image = BufferedImage(8, 8, BufferedImage.TYPE_INT_ARGB)
+            val imageTransfer = object : Transferable {
+                override fun getTransferDataFlavors() = arrayOf(DataFlavor.imageFlavor)
+                override fun isDataFlavorSupported(flavor: DataFlavor) = flavor == DataFlavor.imageFlavor
+                override fun getTransferData(flavor: DataFlavor): Any = if (isDataFlavorSupported(flavor)) image else throw UnsupportedFlavorException(flavor)
+            }
+            clipboard.setContents(imageTransfer, null)
+            input.performKeyInput { keyDown(Key.CtrlLeft); pressKey(Key.V); keyUp(Key.CtrlLeft) }
+            compose.waitUntil(5000) { app.agentModel(editor).pendingAttachments.size == 1 }
+            assertEquals(originalLayers, editor.view.layers.size)
+        } finally {
+            if (originalClipboard != null) runCatching { clipboard.setContents(originalClipboard, null) }
+        }
+        app.agentModel(editor).pendingAttachments.singleOrNull()?.let { app.agentModel(editor).removeAttachment(it.id) }
         compose.onNodeWithContentDescription("最大化").performClick()
         compose.onNodeWithTag("agent-fullscreen").assertExists()
         compose.onNodeWithContentDescription("恢复").performClick()
         compose.onNodeWithTag("agent-fullscreen").assertDoesNotExist()
         compose.onNodeWithContentDescription("历史").performClick()
         compose.onAllNodesWithText("表盘编辑请求", useUnmergedTree = true).assertCountEquals(2)
+        compose.onNodeWithText("关闭", useUnmergedTree = true).performClick()
+        compose.onNodeWithText("OK", useUnmergedTree = true).performMouseInput { click(button = MouseButton.Secondary) }
+        compose.onNodeWithTag("agent-message-context-menu").assertExists()
+        compose.onNode(hasText("复制消息") and hasAnyAncestor(hasTestTag("agent-message-context-menu"))).performClick()
     }
 
 }

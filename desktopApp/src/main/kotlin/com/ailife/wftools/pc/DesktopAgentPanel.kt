@@ -12,16 +12,19 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.*
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
@@ -52,7 +55,11 @@ import java.util.concurrent.TimeUnit
 import java.nio.file.Files
 import java.nio.file.Path
 import java.awt.Toolkit
+import java.awt.Image
+import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.StringSelection
+import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
 
 /** Compact desktop workbench for the watch Agent. It deliberately uses a simple message stream,
  * rather than copying the mobile or IDE sidebar layouts. */
@@ -150,13 +157,16 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
                 if (viewModel.messages.isEmpty() && viewModel.liveText.isBlank()) item {
                     Text("描述你想修改的表盘内容。Agent 会先读取 revision，再验证 XML、脚本和预览。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                 }
-                items(viewModel.messages, key = { it.id }) { message -> AgentMessageBubble(message) }
+                val visibleMessages = visibleAgentMessages(viewModel.messages, viewModel.liveText, viewModel.generating)
+                items(visibleMessages, key = { it.id }) { message ->
+                    AgentMessageBubble(message, onRetry = if (message.role == AgentMessageRole.USER) ({ viewModel.retry(message) }) else null, retryEnabled = !viewModel.generating)
+                }
                 if (viewModel.liveText.isNotBlank()) item(key = "streaming") { AgentMessageBubble(AgentMessage("streaming", viewModel.activeConversation?.id.orEmpty(), AgentMessageRole.ASSISTANT, viewModel.liveText, System.currentTimeMillis(), AgentMessageStatus.STREAMING)) }
             }
             VerticalScrollbar(rememberScrollbarAdapter(listState), Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical = 4.dp).width(8.dp), style = desktopScrollbarStyle())
         }
         viewModel.error?.let { Text(it, Modifier.fillMaxWidth().padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-        if (!viewModel.generating && (viewModel.error != null || viewModel.status == "已停止")) TextButton(onClick = viewModel::retry, modifier = Modifier.padding(horizontal = 8.dp)) { Icon(Icons.Default.Refresh, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text("重试上一条") }
+        if (!viewModel.generating && (viewModel.error != null || viewModel.status == "已停止")) TextButton(onClick = { viewModel.retry() }, modifier = Modifier.padding(horizontal = 8.dp)) { Icon(Icons.Default.Refresh, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text("重试上一条") }
         if (viewModel.pendingAttachments.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             viewModel.pendingAttachments.forEach { attachment -> InputChip(selected = true, onClick = { viewModel.removeAttachment(attachment.id) }, label = { Text(attachment.displayName, maxLines = 1) }, trailingIcon = { Icon(Icons.Default.Close, null, Modifier.size(14.dp)) }) }
         }
@@ -164,8 +174,11 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
             Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 val density = LocalDensity.current
                 Box(Modifier.fillMaxWidth()) {
-                    OutlinedTextField(viewModel.draft, { viewModel.draft = it }, Modifier.fillMaxWidth().height(inputHeight).testTag("agent-input").onPreviewKeyEvent { event ->
-                        if (event.key == Key.Enter && !event.isShiftPressed && event.type in setOf(KeyEventType.KeyDown, KeyEventType.KeyUp)) { viewModel.send(); true } else false
+                    OutlinedTextField(viewModel.draft, { viewModel.draft = it }, Modifier.fillMaxWidth().height(inputHeight).testTag("agent-input").onFocusChanged { state ->
+                        if (state.hasFocus) doc.focus = EditorFocus.TEXT else if (doc.focus == EditorFocus.TEXT) doc.focus = EditorFocus.OTHER
+                    }.onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && event.isCtrlPressed && event.key == Key.V && viewModel.pasteClipboardImage()) true
+                        else if (event.key == Key.Enter && !event.isShiftPressed && event.type in setOf(KeyEventType.KeyDown, KeyEventType.KeyUp)) { viewModel.send(); true } else false
                     }.onKeyEvent { event ->
                         if (event.key == Key.Enter && !event.isShiftPressed && event.type in setOf(KeyEventType.KeyDown, KeyEventType.KeyUp)) { viewModel.send(); true } else false
                     }, placeholder = { Text("告诉 Agent 你要做什么…") }, maxLines = 12)
@@ -218,13 +231,37 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
     if (showSettings) HomeSettingsDialog(app, theme, onTheme, app.canvasInput, { app.canvasInput = it }, onDismiss = { showSettings = false }, initialPage = 1)
 }
 
-@Composable private fun AgentMessageBubble(message: AgentMessage) {
+/** Keep provider tool-turn records, but paint only one copy of repeated prose. */
+internal fun visibleAgentMessages(messages: List<AgentMessage>, liveText: String, generating: Boolean): List<AgentMessage> {
+    val latestToolTurn = messages.indexOfLast { it.role == AgentMessageRole.ASSISTANT && it.toolCalls.isNotEmpty() }
+    return messages.filterIndexed { index, message ->
+        if (generating && liveText.isNotBlank() && message.role == AgentMessageRole.ASSISTANT && message.toolCalls.isEmpty() && message.content.trim() == liveText.trim()) return@filterIndexed false
+        if (message.role != AgentMessageRole.ASSISTANT || message.toolCalls.isEmpty() || message.content.isBlank()) return@filterIndexed true
+        val sameFinalText = messages.drop(index + 1).any { later ->
+            later.role == AgentMessageRole.ASSISTANT && later.content.trim() == message.content.trim()
+        }
+        val nextTurnIsStreaming = generating && liveText.isNotBlank() && index == latestToolTurn
+        !sameFinalText && !nextTurnIsStreaming
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable private fun AgentMessageBubble(message: AgentMessage, onRetry: (() -> Unit)? = null, retryEnabled: Boolean = true) {
     val user = message.role == AgentMessageRole.USER
     val tool = message.role == AgentMessageRole.TOOL
     var expanded by remember(message.id) { mutableStateOf(false) }
     var detailsExpanded by remember(message.id) { mutableStateOf(false) }
+    var contextMenu by remember(message.id) { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (user) Arrangement.End else Arrangement.Start) {
-        Surface(color = if (user) MaterialTheme.colorScheme.primaryContainer else if (tool) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium, modifier = Modifier.widthIn(max = 520.dp)) {
+        Box(
+            Modifier.widthIn(max = 520.dp).onPointerEvent(PointerEventType.Press) { event ->
+                if (event.buttons.isSecondaryPressed) {
+                    contextMenu = true
+                    event.changes.forEach { it.consume() }
+                }
+            },
+        ) {
+        Surface(color = if (user) MaterialTheme.colorScheme.primaryContainer else if (tool) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (tool) {
                     Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
@@ -264,11 +301,37 @@ internal fun DesktopAgentPanel(app: EditorApplicationModel, doc: DocumentControl
                     else Text(attachment.displayName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
                 if (!tool) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    if (onRetry != null) IconButton(enabled = retryEnabled, onClick = onRetry, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Refresh, "重试消息", Modifier.size(15.dp))
+                    }
                     IconButton(onClick = { copyAgentText(message.content) }, modifier = Modifier.size(28.dp)) {
                         Icon(Icons.Default.ContentCopy, "复制消息", Modifier.size(15.dp))
                     }
                 }
             }
+        }
+        DropdownMenu(
+            expanded = contextMenu,
+            onDismissRequest = { contextMenu = false },
+            modifier = Modifier.testTag("agent-message-context-menu"),
+        ) {
+            DropdownMenuItem(
+                text = { Text(if (tool) "复制工具结果" else "复制消息") },
+                leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
+                onClick = {
+                    contextMenu = false
+                    copyAgentText(if (tool && detailsExpanded) toolDetails(message) else message.content)
+                },
+            )
+            if (user && onRetry != null) {
+                DropdownMenuItem(
+                    text = { Text("重试消息") },
+                    leadingIcon = { Icon(Icons.Default.Refresh, null) },
+                    enabled = retryEnabled,
+                    onClick = { contextMenu = false; onRetry() },
+                )
+            }
+        }
         }
     }
 }
@@ -351,6 +414,7 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
     private var shellRunner: DesktopShellRunner? = null
     private var pendingFuture: CompletableFuture<Boolean>? = null
     private val toolInputs = mutableMapOf<String, String>()
+    private val titleJobs = mutableMapOf<String, Job>()
     data class PendingBashApproval(val command: String, val workspaceId: String)
     var pendingBashApproval by mutableStateOf<PendingBashApproval?>(null)
         private set
@@ -488,6 +552,7 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
 
     fun deleteConversation(id: String) {
         scope.launch(Dispatchers.IO) {
+            titleJobs.remove(id)?.cancel()
             app.agentConversationRepository.deleteConversation(id); refreshConversations()
             if (activeConversation?.id == id) newConversation()
         }
@@ -502,9 +567,10 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
         launchGeneration(conversation, user, appendUser = true)
     }
 
-    fun retry() {
+    fun retry(message: AgentMessage? = null) {
         val conversation = activeConversation ?: return
-        val user = messages.lastOrNull { it.role == AgentMessageRole.USER } ?: return
+        val user = message ?: messages.lastOrNull { it.role == AgentMessageRole.USER } ?: return
+        if (user.role != AgentMessageRole.USER || user.conversationId != conversation.id) return
         if (generating) return
         launchGeneration(conversation, user, appendUser = false)
     }
@@ -515,6 +581,9 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
             if (appendUser) {
                 app.agentConversationRepository.appendMessage(conversation.id, user)
                 messages = messages + user
+            } else {
+                app.agentConversationRepository.deleteMessagesAfter(conversation.id, user.id)
+                messages = app.agentConversationRepository.listMessages(conversation.id)
             }
             try {
                 val store = app.agentProviderStore
@@ -532,7 +601,7 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
                 val runner = WatchAgentToolRunner(host,
                     permissionProvider = { WorkspacePermissionSettings(readAllowed = app.agentSettings.readAllowed, writeAllowed = app.agentSettings.writeAllowed, attachmentImportAllowed = app.agentSettings.attachmentImportAllowed) },
                     workspaceImages = AgentWorkspaceImageTools(app.agentWorkspaceManager, doc.view.identity),
-                    externalTools = DesktopAgentExternalTools(app.agentWorkspaceManager, doc.view.identity, app.agentSettings, store.imageApiKey(), store.searchApiKey()),
+                    externalTools = DesktopAgentExternalTools(app.agentWorkspaceManager, doc.view.identity, app.agentSettings, store.imageApiKey(), store.searchApiKey(), doc.session.workDir),
                     shellRunner = nativeShell,
                     workspaceIdProvider = { app.agentWorkspaceManager.bindingFor(doc.view.identity)?.workspaceId.orEmpty() },
                     bashEnabled = { app.agentSettings.bashMode != AgentBashMode.DENY })
@@ -581,22 +650,8 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
                 })
                 val assistant = AgentMessage.assistant(conversation.id, completion.text, System.currentTimeMillis())
                 app.agentConversationRepository.appendMessage(conversation.id, assistant); messages = messages + assistant
-                if (!conversation.titleFinalized && messages.count { it.role == AgentMessageRole.USER } == 1) {
-                    runCatching {
-                        val titleCompletion = provider.send(profile, store.apiKey(profile.id), AgentProviderRequest(
-                            messages = listOf(
-                                AgentRequestMessage(AgentMessageRole.SYSTEM, "请为下面的表盘编辑请求生成一个简短标题，只返回标题本身，不要引号、标点或解释，最多 18 个字。"),
-                                AgentRequestMessage(AgentMessageRole.USER, user.content),
-                            ), stream = false, maxOutputTokens = 32,
-                        ), extraHeaders = store.headers(profile.id))
-                        val title = titleCompletion.text.trim().trim('"', '\'', '`', '。', '！', '!').replace(Regex("\\s+"), " ").take(30)
-                        if (title.isNotBlank()) {
-                            val renamed = app.agentConversationRepository.renameConversation(conversation.id, title)
-                            activeConversation = renamed
-                            refreshConversations()
-                        }
-                    }
-                }
+                app.agentConversationRepository.markGeneratedTitlePending(conversation.id)
+                generateConversationTitle(conversation, profile, store.apiKey(profile.id), store.headers(profile.id), user.content, completion.text)
                 liveText = ""; status = "已完成 · revision ${doc.view.revision}"
                 refreshConversations()
             } catch (cancelled: CancellationException) { liveText = ""; status = "已停止" }
@@ -626,9 +681,70 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
                 .onFailure { error = it.message ?: "图片无法添加" }
         }
     }
+    /** Routes an image paste into the Agent composer when it owns focus. */
+    fun pasteClipboardImage(): Boolean {
+        val clipboard = runCatching { Toolkit.getDefaultToolkit().systemClipboard }.getOrNull() ?: return false
+        if (!runCatching { clipboard.isDataFlavorAvailable(DataFlavor.imageFlavor) }.getOrDefault(false)) return false
+        val image = runCatching { clipboard.getData(DataFlavor.imageFlavor) as? Image }.getOrNull() ?: return false
+        val width = image.getWidth(null).takeIf { it > 0 } ?: return true
+        val height = image.getHeight(null).takeIf { it > 0 } ?: return true
+        val buffered = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
+        val graphics = buffered.createGraphics()
+        try { graphics.drawImage(image, 0, 0, null) } finally { graphics.dispose() }
+        val temporary = runCatching { Files.createTempFile("wftools-agent-clipboard-", ".png") }.getOrNull() ?: return true
+        try {
+            if (!ImageIO.write(buffered, "png", temporary.toFile())) throw IllegalStateException("PNG 编码器不可用")
+            val conversation = activeConversation ?: return true
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val attachment = app.agentConversationRepository.addImageAttachment(conversation.id, temporary)
+                    pendingAttachments = pendingAttachments + attachment
+                } catch (failure: Throwable) {
+                    error = failure.message ?: "剪贴板图片无法添加"
+                } finally {
+                    Files.deleteIfExists(temporary)
+                }
+            }
+        } catch (failure: Throwable) {
+            Files.deleteIfExists(temporary)
+            error = failure.message ?: "剪贴板图片无法读取"
+        }
+        return true
+    }
     fun removeAttachment(id: String) { pendingAttachments = pendingAttachments.filterNot { it.id == id } }
     fun stop() { resolveBashApproval(false); shellRunner?.cancelAll(); job?.cancel(); job = null }
-    fun close() { stop(); scope.cancel() }
+    fun close() { titleJobs.values.forEach(Job::cancel); titleJobs.clear(); stop(); scope.cancel() }
+
+    private fun generateConversationTitle(
+        conversation: AgentConversation,
+        profile: AiProviderProfile,
+        apiKey: String?,
+        headers: Map<String, String>,
+        userText: String,
+        modelText: String,
+    ) {
+        val current = app.agentConversationRepository.getConversation(conversation.id)
+        if (current?.titleFinalized != false || titleJobs[conversation.id]?.isActive == true) return
+        titleJobs[conversation.id] = scope.launch(Dispatchers.IO) {
+            try {
+                val completion = AgentProviderClient().send(
+                    profile.copy(reasoningEffort = null),
+                    apiKey,
+                    AgentConversationTitlePrompt.request(userText, modelText),
+                    extraHeaders = headers,
+                )
+                val updated = app.agentConversationRepository.applyGeneratedTitle(conversation.id, completion.text)
+                if (updated != null && activeConversation?.id == updated.id) activeConversation = updated
+                refreshConversations()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Keep the first-user-message title and retry after a later successful turn.
+            } finally {
+                titleJobs.remove(conversation.id)
+            }
+        }
+    }
 
     private suspend fun refreshConversations() { conversations = app.agentConversationRepository.listConversations(doc.view.identity) }
     private fun detectGlobalPython(): Boolean {

@@ -442,7 +442,7 @@ class EditorRedContractsTest {
             operationMode=CanvasOperationMode.SELECT_THEN_DRAG,
         )}}
         compose.onNodeWithTag("empty-selection-pan-canvas").performMouseInput{
-            moveTo(center);press();moveTo(center+Offset(70f,35f));release()
+            moveTo(Offset(20f,20f));press();moveTo(Offset(90f,55f));release()
         }
         compose.runOnIdle{
             assertFalse(workspace.fit)

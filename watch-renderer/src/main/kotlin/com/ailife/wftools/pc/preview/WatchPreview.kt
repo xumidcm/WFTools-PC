@@ -455,7 +455,7 @@ fun WatchPreview(
                         val initialSelection = currentSelection
                         val hardPan = canvasDragPans(
                             CanvasDragButton.PRIMARY,
-                            currentMode,initialSelection.selected,middleButtonPanEnabled=currentMiddleButtonPanEnabled,rightButtonPanEnabled=currentRightButtonPanEnabled,
+                            currentMode,initialSelection.selected,hitId=hitId,middleButtonPanEnabled=currentMiddleButtonPanEnabled,rightButtonPanEnabled=currentRightButtonPanEnabled,
                             spaceDown=spaceDown,ctrlPrimary=ctrlPanCandidate,
                         )
                         val expectedSelection = hitId?.let { canvasPressSelection(initialSelection, it, order, ctrlAtDown, shiftAtDown) }

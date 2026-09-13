@@ -159,6 +159,7 @@ class CanvasEditingTest {
 
     @Test fun `select then drag uses empty selection as a primary workspace pan gesture`() {
         assertTrue(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.SELECT_THEN_DRAG,emptySet()))
+        assertFalse(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.SELECT_THEN_DRAG,emptySet(),hitId="first"))
         assertFalse(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.SELECT_THEN_DRAG,setOf("layer")))
         assertFalse(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.DIRECT_DRAG,emptySet()))
         assertTrue(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.DIRECT_DRAG,setOf("layer"),spaceDown=true))

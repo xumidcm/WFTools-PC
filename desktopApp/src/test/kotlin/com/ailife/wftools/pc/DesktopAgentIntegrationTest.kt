@@ -13,8 +13,13 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayInputStream
+import java.net.InetSocketAddress
 import java.nio.file.Files
 import javax.imageio.ImageIO
+import com.sun.net.httpserver.HttpServer
+import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
+import java.util.Base64
 import java.util.zip.ZipFile
 
 class DesktopAgentIntegrationTest {
@@ -26,6 +31,47 @@ class DesktopAgentIntegrationTest {
         assertFalse(withoutPython.contains("全局 Python"))
         assertTrue(withPython.contains("全局 Python"))
         assertTrue(withPython.contains("run_command"))
+    }
+
+    @Test fun `openai image tools pass dynamic options edit an asset and scrape page text`() {
+        val png = ByteArrayOutputStream().also { ImageIO.write(BufferedImage(8, 8, BufferedImage.TYPE_INT_ARGB), "png", it) }.toByteArray()
+        val encoded = Base64.getEncoder().encodeToString(png)
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val requests = mutableListOf<String>()
+        fun respond(exchange: com.sun.net.httpserver.HttpExchange, contentType: String, body: String) {
+            exchange.responseHeaders.set("Content-Type", contentType)
+            val bytes = body.toByteArray(Charsets.UTF_8)
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+        server.createContext("/v1/images/generations") { exchange -> requests += exchange.requestBody.readAllBytes().toString(Charsets.UTF_8); respond(exchange, "application/json", "{\"data\":[{\"b64_json\":\"$encoded\"}]}") }
+        server.createContext("/v1/images/edits") { exchange -> requests += exchange.requestBody.readAllBytes().toString(Charsets.ISO_8859_1); respond(exchange, "application/json", "{\"data\":[{\"b64_json\":\"$encoded\"}]}") }
+        server.createContext("/search") { exchange -> requests += exchange.requestBody.readAllBytes().toString(Charsets.UTF_8); respond(exchange, "application/json", "{\"results\":[{\"title\":\"结果\",\"url\":\"http://example.test\",\"content\":\"摘要\"}]}") }
+        server.createContext("/extract") { exchange -> requests += exchange.requestBody.readAllBytes().toString(Charsets.UTF_8); respond(exchange, "application/json", "{\"results\":[{\"raw_content\":\"API 抽取正文\"}]}") }
+        server.createContext("/page") { exchange -> respond(exchange, "text/html", "<html><head><title>测试页面</title></head><body><h1>正文标题</h1><p>页面正文 &amp; 内容</p><script>ignore()</script></body></html>") }
+        server.start()
+        try {
+            val manager = WorkspaceManager(temp.newFolder("image-tools").toPath())
+            val workspace = manager.create("图片工作区", watchScope = "face")
+            Files.write(workspace.paths.generated.resolve("source.png"), png)
+            val settings = com.ailife.wftools.agent.model.AgentFeatureSettings(
+                imageGenerationEndpoint = "http://127.0.0.1:${server.address.port}/v1",
+                searchEndpoint = "http://127.0.0.1:${server.address.port}/search",
+            )
+            val tools = DesktopAgentExternalTools(manager, "face", settings, null, null)
+            val generated = tools.generateImage(WatchAgentImageGenerationRequest("蓝色表盘背景", size = "640x480", quality = "high", background = "transparent"))
+            assertTrue(generated.path.startsWith("generated/"))
+            assertTrue(requests.first().contains("640x480"))
+            assertTrue(requests.first().contains("transparent"))
+            tools.editImage(WatchAgentImageEditRequest("generated/source.png", "把背景改成红色", inputFidelity = "high"))
+            assertTrue(requests[1].contains("name=\"image\""))
+            assertTrue(tools.searchWeb("表盘素材").contains("结果"))
+            assertTrue(requests.any { it.contains("表盘素材") })
+            val page = tools.scrapePage("http://127.0.0.1:${server.address.port}/page")
+            assertTrue(page.contains("API 抽取正文"))
+        } finally {
+            server.stop(0)
+        }
     }
 
     @Test fun `agent imports generated SVG as a real PNG asset`() {

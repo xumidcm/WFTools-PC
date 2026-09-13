@@ -1,6 +1,9 @@
 package com.ailife.wftools.pc
 
 import com.ailife.wftools.pc.core.EditorLayer
+import com.ailife.wftools.agent.model.AgentMessage
+import com.ailife.wftools.agent.model.AgentMessageRole
+import com.ailife.wftools.agent.model.AgentToolCallRecord
 import org.junit.Assert.*
 import org.junit.Test
 import java.nio.file.Path
@@ -73,6 +76,16 @@ class EditorLogicTest {
         assertTrue(documentPasteOwnsFocus(EditorFocus.CANVAS))
         assertTrue(documentPasteOwnsFocus(EditorFocus.LAYERS))
         assertFalse(documentPasteOwnsFocus(EditorFocus.TEXT))
+    }
+    @Test fun `streaming and final assistant text do not repeat an earlier tool preamble`() {
+        val user = AgentMessage.user("c", "画一个图", 1L)
+        val earlier = AgentMessage.assistant("c", "上一轮内容", 2L).copy(toolCalls = listOf(AgentToolCallRecord("a", "inspect_face", "{}")))
+        val current = AgentMessage.assistant("c", "可以生成图片", 3L).copy(toolCalls = listOf(AgentToolCallRecord("b", "generate_image", "{}")))
+        val streaming = visibleAgentMessages(listOf(user, earlier, current), "可以生成图片", true)
+        assertEquals(listOf(user.id, earlier.id), streaming.map { it.id })
+        val final = AgentMessage.assistant("c", "可以生成图片", 4L)
+        val completed = visibleAgentMessages(listOf(user, earlier, current, final), "", false)
+        assertEquals(listOf(user.id, earlier.id, final.id), completed.map { it.id })
     }
     @Test fun `atlas pages and sounds cannot be applied as fonts or image paths`() {
         fun asset(relative: String) = AssetItem(Path.of(relative),relative,relative.substringBefore('/'))

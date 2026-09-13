@@ -26,7 +26,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import com.ailife.wftools.pc.platform.desktopPlatformLabel
+import com.ailife.wftools.pc.platform.fileManagerOpenLabel
 import com.ailife.wftools.pc.platform.openExternalUrl
+import com.ailife.wftools.pc.platform.openDirectoryInFileManager
 import com.ailife.wftools.pc.platform.watchFileAssociation
 import com.ailife.wftools.agent.model.AiProviderProfile
 import com.ailife.wftools.agent.model.AiProtocol
@@ -311,7 +313,7 @@ internal fun performFileAssociationAction(
             OutlinedTextField(searchEndpoint, { searchEndpoint = it; agent = agent.copy(searchEndpoint = it.takeIf(String::isNotBlank)); app.updateAgentSettings(agent) }, Modifier.fillMaxWidth(), label = { Text("搜索接口 · 可选") }, singleLine = true)
             OutlinedTextField(searchKey, { searchKey = it }, Modifier.fillMaxWidth(), label = { Text("搜索接口 API Key · 可留空") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
             OutlinedButton(onClick = { app.agentProviderStore.saveImageApiKey(imageKey); app.agentProviderStore.saveSearchApiKey(searchKey); providerMessage = "外部接口凭据已加密保存。" }) { Text("保存外部接口凭据") }
-            Text("图片附件和本机预览可直接使用；外部图片生成与搜索需配置兼容接口。", style=MaterialTheme.typography.bodySmall, color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("图片附件和本机预览可直接使用；外部图片生成、网络搜索和网页正文抓取需配置兼容接口。", style=MaterialTheme.typography.bodySmall, color=MaterialTheme.colorScheme.onSurfaceVariant)
             Text("工作区",style=MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(workspaceName, { workspaceName = it }, Modifier.weight(1f), label = { Text("新建工作区名称") }, singleLine = true)
@@ -323,7 +325,27 @@ internal fun performFileAssociationAction(
                     }.onFailure { providerMessage = it.message }
                 }, modifier = Modifier.align(Alignment.CenterVertically)) { Text("创建") }
             }
-            workspaces.forEach { workspace -> FilterChip(selected = agent.workspaceId == workspace.id, onClick = { agent = agent.copy(workspaceId = workspace.id); app.updateAgentSettings(agent) }, label = { Text("${workspace.displayName} · ${workspace.quota.usedBytes / 1024 / 1024}/${workspace.quota.limitBytes / 1024 / 1024} MiB") }) }
+            workspaces.forEach { workspace ->
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = agent.workspaceId == workspace.id,
+                        onClick = { agent = agent.copy(workspaceId = workspace.id); app.updateAgentSettings(agent) },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("${workspace.displayName} · ${workspace.quota.usedBytes / 1024 / 1024}/${workspace.quota.limitBytes / 1024 / 1024} MiB", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    )
+                    if (agent.workspaceId == workspace.id) {
+                        OutlinedButton(
+                            onClick = { runCatching { openDirectoryInFileManager(workspace.paths.root) }.onFailure { providerMessage = it.message ?: "无法打开工作区目录" } },
+                            modifier = Modifier.testTag("agent-open-workspace"),
+                            contentPadding = PaddingValues(horizontal = 10.dp),
+                        ) {
+                            Icon(Icons.Default.FolderOpen, null, Modifier.size(17.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text(fileManagerOpenLabel(), maxLines = 1)
+                        }
+                    }
+                }
+            }
             Text("每个表盘绑定一个隔离工作区；未选时首次进入 AI 页自动创建。", style=MaterialTheme.typography.bodySmall, color=MaterialTheme.colorScheme.onSurfaceVariant)
             Text("命令与权限",style=MaterialTheme.typography.titleSmall)
             HomeCanvasInputSwitch("允许读取当前表盘", agent.readAllowed, "agent-read-toggle") { agent = agent.copy(readAllowed = it); app.updateAgentSettings(agent) }

@@ -1,6 +1,7 @@
 package com.ailife.wftools.agent.storage
 
 import com.ailife.wftools.agent.model.*
+import com.ailife.wftools.agent.runtime.AgentConversationTitlePrompt
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
@@ -38,10 +39,36 @@ class AgentConversationRepository(private val root: Path) {
         writeConversations(conversation.watchScope, listConversations(conversation.watchScope).filterNot { it.id == conversation.id } + title.copy(updatedAt = maxOf(title.updatedAt, message.createdAt)))
         return message
     }
+    @Synchronized fun deleteMessagesAfter(conversationId: String, messageId: String) {
+        val conversation = getConversation(conversationId) ?: return
+        val all = listMessages(conversationId)
+        val index = all.indexOfFirst { it.id == messageId }
+        if (index < 0) return
+        writeJson(messagesFile(conversationId, conversation.watchScope), all.take(index + 1))
+    }
     @Synchronized fun renameConversation(id: String, title: String): AgentConversation {
         val current = requireNotNull(getConversation(id)); require(title.isNotBlank())
         val updated = current.copy(title = title.trim().replace(Regex("\\s+"), " ").take(120), titleFinalized = true, updatedAt = System.currentTimeMillis())
         writeConversations(current.watchScope, listConversations(current.watchScope).filterNot { it.id == id } + updated); return updated
+    }
+
+    /** Persists a generated title as provisional so later turns may refine it. */
+    @Synchronized fun applyGeneratedTitle(id: String, rawTitle: String): AgentConversation? {
+        val current = getConversation(id) ?: return null
+        if (current.titleFinalized) return current
+        val cleaned = AgentConversationTitlePrompt.clean(rawTitle) ?: return current
+        val updated = current.copy(title = cleaned, titleFinalized = false)
+        writeConversations(current.watchScope, listConversations(current.watchScope).filterNot { it.id == id } + updated)
+        return updated
+    }
+
+    /** Mirrors Flue: a manually finalized title becomes eligible for refinement after a later turn. */
+    @Synchronized fun markGeneratedTitlePending(id: String): AgentConversation? {
+        val current = getConversation(id) ?: return null
+        if (!current.titleFinalized) return current
+        val updated = current.copy(titleFinalized = false)
+        writeConversations(current.watchScope, listConversations(current.watchScope).filterNot { it.id == id } + updated)
+        return updated
     }
     @Synchronized fun deleteConversation(id: String) {
         val current = getConversation(id) ?: return

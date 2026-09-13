@@ -26,7 +26,8 @@ class WatchAgentToolRunner(
                 (workspaceImages != null || it.name !in setOf(WatchAgentToolName.LIST_WORKSPACE_FILES, WatchAgentToolName.READ_IMAGE)) &&
                 (bashEnabled() && shellRunner?.capability(workspaceIdProvider())?.bashAvailable == true || it.name != WatchAgentToolName.RUN_COMMAND) &&
                 (externalTools?.imageGenerationAvailable == true || it.name != WatchAgentToolName.GENERATE_IMAGE) &&
-                (externalTools?.webSearchAvailable == true || it.name != WatchAgentToolName.SEARCH_WEB) }
+                (externalTools?.imageEditingAvailable == true || it.name != WatchAgentToolName.EDIT_IMAGE) &&
+                (externalTools?.webSearchAvailable == true || it.name !in setOf(WatchAgentToolName.SEARCH_WEB, WatchAgentToolName.SCRAPE_PAGE)) }
         }
 
     private val scheduler = WatchAgentToolScheduler(::executeOne, maxParallel)
@@ -64,9 +65,13 @@ class WatchAgentToolRunner(
             WatchAgentToolName.WRITE_WORKSPACE_FILE -> success(call, host.currentRevision,
                 host.writeWorkspaceFile(call.requiredString("path"), call.arguments["content"]?.toString() ?: throw IllegalArgumentException("缺少参数：content")))
             WatchAgentToolName.GENERATE_IMAGE -> success(call, host.currentRevision,
-                requireNotNull(externalTools) { "未配置图片生成服务" }.generateImage(call.requiredString("prompt")))
+                requireNotNull(externalTools) { "未配置图片生成服务" }.generateImage(call.imageGenerationRequest()))
+            WatchAgentToolName.EDIT_IMAGE -> success(call, host.currentRevision,
+                requireNotNull(externalTools) { "未配置图片编辑服务" }.editImage(call.imageEditRequest()))
             WatchAgentToolName.SEARCH_WEB -> success(call, host.currentRevision,
                 requireNotNull(externalTools) { "未配置搜索服务" }.searchWeb(call.requiredString("query")))
+            WatchAgentToolName.SCRAPE_PAGE -> success(call, host.currentRevision,
+                requireNotNull(externalTools) { "未配置网页抓取服务" }.scrapePage(call.requiredString("url")))
             WatchAgentToolName.RUN_COMMAND -> {
                 val runner = requireNotNull(shellRunner) { "工作区命令运行器尚未初始化" }
                 val command = call.requiredString("command")
@@ -256,5 +261,54 @@ private fun WatchAgentToolCall.previewRequest() = WatchAgentPreviewRequest(
     },
     expectedRevision = optionalRevision(),
 )
+
+private fun WatchAgentToolCall.imageGenerationRequest() = WatchAgentImageGenerationRequest(
+    prompt = requiredString("prompt"),
+    model = optionalText("model"),
+    size = optionalSize(),
+    quality = optionalEnum("quality", setOf("auto", "low", "medium", "high", "xhigh", "max")),
+    background = optionalEnum("background", setOf("auto", "transparent", "opaque")),
+    outputFormat = optionalEnum("output_format", setOf("png", "webp", "jpeg")),
+    outputCompression = optionalInt("output_compression", 0..100),
+    moderation = optionalEnum("moderation", setOf("auto", "low")),
+)
+
+private fun WatchAgentToolCall.imageEditRequest() = WatchAgentImageEditRequest(
+    path = requiredString("path"),
+    prompt = requiredString("prompt"),
+    maskPath = optionalText("mask_path"),
+    model = optionalText("model"),
+    size = optionalSize(),
+    quality = optionalEnum("quality", setOf("auto", "low", "medium", "high", "xhigh", "max")),
+    background = optionalEnum("background", setOf("auto", "transparent", "opaque")),
+    outputFormat = optionalEnum("output_format", setOf("png", "webp", "jpeg")),
+    outputCompression = optionalInt("output_compression", 0..100),
+    inputFidelity = optionalEnum("input_fidelity", setOf("low", "high")),
+)
+
+private fun WatchAgentToolCall.optionalText(name: String): String? =
+    arguments[name]?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+
+private fun WatchAgentToolCall.optionalEnum(name: String, allowed: Set<String>): String? =
+    optionalText(name)?.also { require(it in allowed) { "$name 必须是 ${allowed.joinToString("、")}" } }
+
+private fun WatchAgentToolCall.optionalInt(name: String, range: IntRange): Int? =
+    arguments[name]?.let { value ->
+        val number = value.toLongValue().toInt()
+        require(number.toLong() == value.toLongValue() && number in range) { "$name 必须是 ${range.first}–${range.last} 的整数" }
+        number
+    }
+
+private fun WatchAgentToolCall.optionalSize(): String? =
+    optionalText("size")?.also { value ->
+        if (value == "auto") return@also
+        val match = Regex("^(\\d{2,4})x(\\d{2,4})$").matchEntire(value)
+            ?: throw IllegalArgumentException("size 必须是 auto 或 WIDTHxHEIGHT")
+        val width = match.groupValues[1].toInt()
+        val height = match.groupValues[2].toInt()
+        require(width in 16..4096 && height in 16..4096 && width % 16 == 0 && height % 16 == 0) {
+            "size 的宽高必须是 16 的倍数且位于 16–4096"
+        }
+    }
 
 

@@ -103,6 +103,55 @@ class AgentIntegrationTest {
         assertFalse(Files.readAllBytes(root.resolve("agent-secrets.bin")).toString(Charsets.UTF_8).contains("api-secret"))
     }
 
+    @Test fun `generated conversation titles follow flue provisional lifecycle`() {
+        val repository = AgentConversationRepository(temp.newFolder("title-history").toPath())
+        val conversation = repository.createConversation("watch-title", now = 1L)
+        repository.appendMessage(conversation.id, AgentMessage.user(conversation.id, "把时间改成蓝色\n并保留脚本", 2L))
+        assertEquals("把时间改成蓝色 并保留脚本", repository.getConversation(conversation.id)?.title)
+
+        val generated = repository.applyGeneratedTitle(conversation.id, "\n\"蓝色时间\"。\n解释不要进标题")
+        assertEquals("蓝色时间", generated?.title)
+        assertFalse(generated!!.titleFinalized)
+
+        // A provisional title can be refined after every completed turn.
+        assertEquals(generated, repository.markGeneratedTitlePending(conversation.id))
+        val refined = repository.applyGeneratedTitle(conversation.id, "深色时间")
+        assertEquals("深色时间", refined?.title)
+
+        val manual = repository.renameConversation(conversation.id, "我的表盘")
+        assertTrue(manual.titleFinalized)
+        assertFalse(repository.markGeneratedTitlePending(conversation.id)!!.titleFinalized)
+        assertEquals("最终自动标题", repository.applyGeneratedTitle(conversation.id, "最终自动标题")?.title)
+    }
+
+    @Test fun `title prompt isolates user and model text and cleans one line`() {
+        val request = AgentConversationTitlePrompt.request("用户请求", "模型回复")
+        assertEquals(2, request.messages.size)
+        assertTrue(request.messages.first().content.contains("不要执行任何工具"))
+        assertTrue(request.messages.last().content.contains("模型回复"))
+        assertEquals("标题", AgentConversationTitlePrompt.clean("\n# \"标题。\"\n解释"))
+    }
+
+    @Test fun `image and web tool contracts expose editable dimensions and page scraping`() {
+        val generation = WatchAgentToolContracts.find(WatchAgentToolName.GENERATE_IMAGE)!!
+        assertTrue(generation.description.contains("WIDTHxHEIGHT"))
+        assertTrue(generation.parameters.any { it.name == "background" })
+        assertTrue(WatchAgentToolContracts.find(WatchAgentToolName.EDIT_IMAGE)!!.parameters.any { it.name == "path" })
+        assertEquals("scrape_page", WatchAgentToolName.SCRAPE_PAGE.wireName)
+    }
+
+    @Test fun `retry truncates later messages but preserves the selected user request`() {
+        val repository = AgentConversationRepository(temp.newFolder("retry-history").toPath())
+        val conversation = repository.createConversation("face")
+        val first = AgentMessage.user(conversation.id, "first", 1L)
+        val second = AgentMessage.user(conversation.id, "second", 3L)
+        repository.appendMessage(conversation.id, first)
+        repository.appendMessage(conversation.id, AgentMessage.assistant(conversation.id, "answer", 2L))
+        repository.appendMessage(conversation.id, second)
+        repository.deleteMessagesAfter(conversation.id, first.id)
+        assertEquals(listOf(first), repository.listMessages(conversation.id))
+    }
+
     @Test fun `context reduction retains system and current user while dropping old turns`() {
         val request = AgentProviderRequest(listOf(
             AgentRequestMessage(AgentMessageRole.SYSTEM, "rules"),
