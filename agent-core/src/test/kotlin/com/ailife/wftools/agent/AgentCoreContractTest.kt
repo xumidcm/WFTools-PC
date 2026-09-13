@@ -10,10 +10,14 @@ import com.ailife.wftools.agent.runtime.WatchAgentLoop
 import com.ailife.wftools.agent.tools.WatchAgentToolCall
 import com.ailife.wftools.agent.tools.WatchAgentToolScheduler
 import com.ailife.wftools.agent.tools.WatchAgentToolResult
+import com.ailife.wftools.agent.tools.AgentWorkspaceImageTools
 import com.ailife.wftools.agent.workspace.WorkspaceManager
 import org.junit.Assert.*
 import org.junit.Test
 import java.nio.file.Files
+import java.io.ByteArrayOutputStream
+import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -90,5 +94,22 @@ class AgentCoreContractTest {
         val source = Files.createTempFile("source", ".txt").also { Files.writeString(it, "12345") }
         assertEquals(com.ailife.wftools.agent.workspace.ImportResult.QUOTA_EXCEEDED, manager.importFile(workspace.id, source, "workspace/a.txt"))
         assertThrows(IllegalArgumentException::class.java) { manager.syncFaceMirror(workspace.id, "12345", "") }
+    }
+
+    @Test fun `workspace browser lists every supported file under workspace roots and bound face mirror`() {
+        val root = Files.createTempDirectory("agent-browser")
+        val manager = WorkspaceManager(root)
+        val workspace = manager.create("浏览", watchScope = "face")
+        Files.writeString(workspace.paths.workspace.resolve("script.py"), "print('ok')")
+        Files.writeString(workspace.paths.generated.resolve("notes.txt"), "generated")
+        Files.writeString(workspace.paths.face.resolve("watch.xml"), "mirror")
+        val faceImage = workspace.paths.face.resolve("images/face.png")
+        Files.createDirectories(faceImage.parent)
+        ByteArrayOutputStream().also { ImageIO.write(BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB), "png", it); Files.write(faceImage, it.toByteArray()) }
+        val files = AgentWorkspaceImageTools(manager, "face").listFiles()
+        assertTrue(files.contains("workspace/script.py"))
+        assertTrue(files.contains("generated/notes.txt"))
+        assertTrue(files.contains("face/watch.xml"))
+        assertEquals("face/images/face.png", AgentWorkspaceImageTools(manager, "face").readImage("images/face.png").path)
     }
 }

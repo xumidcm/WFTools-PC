@@ -57,8 +57,8 @@ object WatchAgentToolContracts {
     const val schemaVersion: String = "watch-agent-tools-v1"
 
     val all: List<WatchAgentToolContract> = listOf(
-        WatchAgentToolContract(WatchAgentToolName.LIST_WORKSPACE_FILES, "列出当前绑定工作区的文件，包括 workspace、generated、previews 和 home。图片路径可用于 read_image。"),
-        WatchAgentToolContract(WatchAgentToolName.READ_IMAGE, "读取当前工作区内的图片、生成图片或预览，返回真实图片供视觉分析。",
+        WatchAgentToolContract(WatchAgentToolName.LIST_WORKSPACE_FILES, "列出当前绑定工作区与表盘 face/ 镜像中的全部受控文件，包括 watch.xml、脚本、字体、素材和图片；图片路径可用于 read_image。"),
+        WatchAgentToolContract(WatchAgentToolName.READ_IMAGE, "读取当前工作区和绑定表盘包内任意位置的图片（包括 images/ 与包根目录图片），返回真实图片供视觉分析。",
             listOf(WatchAgentToolParameter("path", "string", required = true))),
         WatchAgentToolContract(
             WatchAgentToolName.WRITE_WORKSPACE_FILE,
