@@ -25,9 +25,15 @@ import javax.swing.SwingUtilities
  * file-type filters, and supports multi-selection and folder picking.
  *
  * The dialog has no IDispatch interface, so the vtable is called directly. Everything here is
- * best-effort: any failure returns null so the caller falls back to the AWT path and behaviour
- * stays exactly as it was before.
+ * best-effort: failures before the shell dialog is shown can fall back to AWT. Once the user has
+ * seen and dismissed the modern picker, its empty/partial result is final; opening a second legacy
+ * picker would make one click unexpectedly launch two different file choosers.
  */
+internal sealed class ModernDialogResult {
+    data class Completed(val paths: List<Path>) : ModernDialogResult()
+    data object Unavailable : ModernDialogResult()
+}
+
 internal object WindowsCommonDialog {
     private val CLSID_FILE_OPEN_DIALOG = GUID("{DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7}")
     private val CLSID_FILE_SAVE_DIALOG = GUID("{C0B4E2F3-BA21-4773-8DBA-335EC946EB8B}")
@@ -90,10 +96,8 @@ internal object WindowsCommonDialog {
 
     /**
      * Runs the dialog. [multiple] allows multi-select and [save] switches to the save flavour
-     * with an overwrite prompt.
-     *
-     * Returns the chosen paths, an empty list when the user cancelled, or null when the modern
-     * dialog is unavailable so the caller can fall back to AWT.
+     * with an overwrite prompt. The nullable wrapper is retained for callers that only need the
+     * old API; [showWithOutcome] carries the important distinction between cancel and unavailable.
      */
     fun show(
         owner: Component?,
@@ -104,9 +108,26 @@ internal object WindowsCommonDialog {
         save: Boolean = false,
         multiple: Boolean = false,
     ): List<Path>? {
-        if (!usable) return null
+        return when (val outcome = showWithOutcome(owner, title, filters, defaultName, defaultExtension, save, multiple)) {
+            is ModernDialogResult.Completed -> outcome.paths
+            ModernDialogResult.Unavailable -> null
+        }
+    }
+
+    /** Runs the modern picker without conflating a user cancellation with COM unavailability. */
+    internal fun showWithOutcome(
+        owner: Component?,
+        title: String,
+        filters: List<FileDialogFilter>,
+        defaultName: String? = null,
+        defaultExtension: String? = null,
+        save: Boolean = false,
+        multiple: Boolean = false,
+    ): ModernDialogResult {
+        if (!usable) return ModernDialogResult.Unavailable
         val ownerPointer = ownerHandle(owner)
-        return onStaThread {
+        val dialogShown = java.util.concurrent.atomic.AtomicBoolean(false)
+        val outcome = onStaThread {
             val open = !save
             val out = PointerByReference()
             val created = hrValue(Ole32.INSTANCE.CoCreateInstance(
@@ -125,24 +146,40 @@ internal object WindowsCommonDialog {
                 val optionsResult = invoke(dialog, SLOT_SET_OPTIONS, options)
                 if (optionsResult != S_OK) return@onStaThread unavailable("IFileDialog.SetOptions", optionsResult)
                 if (title.isNotBlank()) invoke(dialog, SLOT_SET_TITLE, WString(title))
-                if (filters.isNotEmpty() && !applyFileTypes(dialog, filters)) return@onStaThread null
+                if (filters.isNotEmpty() && !applyFileTypes(dialog, filters)) return@onStaThread ModernDialogResult.Unavailable
                 defaultExtension?.takeIf(String::isNotBlank)?.let { invoke(dialog, SLOT_SET_DEFAULT_EXTENSION, WString(it)) }
                 defaultName?.takeIf(String::isNotBlank)?.let { invoke(dialog, SLOT_SET_FILENAME, WString(it)) }
 
                 val shown = invokeWithPointer(dialog, SLOT_SHOW, ownerPointer)
-                if (shown == HRESULT_CANCELLED) return@onStaThread emptyList()
+                // S_OK means a selection was made; the cancellation HRESULT means the user saw
+                // the modern dialog and deliberately closed it. Both are terminal outcomes.
+                if (shown == S_OK || shown == HRESULT_CANCELLED) dialogShown.set(true)
+                if (shown == HRESULT_CANCELLED) return@onStaThread ModernDialogResult.Completed(emptyList())
                 if (shown != S_OK) return@onStaThread unavailable("IFileDialog.Show", shown)
 
                 if (!multiple) {
                     val result = PointerByReference()
                     val resultCode = invokeOut(dialog, SLOT_GET_RESULT, result)
-                    if (resultCode != S_OK) return@onStaThread unavailable("IFileDialog.GetResult", resultCode)
-                    val item = result.value ?: return@onStaThread unavailable("IFileDialog.GetResult returned no item")
-                    try { listOfNotNull(displayName(item)) } finally { release(item) }
-                } else readMultiple(dialog)
+                    if (resultCode != S_OK) {
+                        unavailable("IFileDialog.GetResult", resultCode)
+                        return@onStaThread ModernDialogResult.Completed(emptyList())
+                    }
+                    val item = result.value
+                    if (item == null) {
+                        unavailable("IFileDialog.GetResult returned no item")
+                        return@onStaThread ModernDialogResult.Completed(emptyList())
+                    }
+                    ModernDialogResult.Completed(try { listOfNotNull(displayName(item)) } finally { release(item) })
+                } else ModernDialogResult.Completed(readMultiple(dialog))
             } finally { release(dialog) }
         }
+        // A native extraction quirk must not reopen an AWT dialog after the user already made a
+        // choice. Keep the diagnostic in lastFailure, but treat the visible modern interaction as
+        // complete even if an unexpected exception escaped the STA block.
+        return outcome ?: if (dialogShown.get()) ModernDialogResult.Completed(emptyList()) else ModernDialogResult.Unavailable
     }
+
+    internal fun shouldFallbackToLegacy(result: ModernDialogResult): Boolean = result is ModernDialogResult.Unavailable
 
     /**
      * AWT/Compose may already have initialised its event thread as MTA. IFileDialog requires STA;
@@ -207,21 +244,32 @@ internal object WindowsCommonDialog {
 
     private fun wideString(value: String): Memory = Memory((value.length + 1) * 2L).apply { setWideString(0, value) }
 
-    private fun readMultiple(dialog: Pointer): List<Path>? {
+    private fun readMultiple(dialog: Pointer): List<Path> {
         val array = PointerByReference()
         val result = invokeOut(dialog, SLOT_GET_RESULTS, array)
-        if (result != S_OK) return unavailable("IFileOpenDialog.GetResults", result)
-        val items = array.value ?: return unavailable("IFileOpenDialog.GetResults returned no array")
+        if (result != S_OK) {
+            unavailable("IFileOpenDialog.GetResults", result)
+            return emptyList()
+        }
+        val items = array.value ?: run {
+            unavailable("IFileOpenDialog.GetResults returned no array")
+            return emptyList()
+        }
         return try {
             val counter = Memory(4L)
             val countResult = invoke(items, SLOT_ARRAY_GET_COUNT, counter)
-            if (countResult != S_OK) return unavailable("IShellItemArray.GetCount", countResult)
-            val paths = (0 until counter.getInt(0L)).mapNotNull { index ->
+            if (countResult != S_OK) {
+                unavailable("IShellItemArray.GetCount", countResult)
+                return emptyList()
+            }
+            val count = counter.getInt(0L).coerceAtLeast(0)
+            val paths = (0 until count).mapNotNull { index ->
                 val one = PointerByReference()
-                if (invokeOut(items, SLOT_ARRAY_GET_ITEM_AT, one, index) != S_OK) null
+                if (invokeIndexedOut(items, SLOT_ARRAY_GET_ITEM_AT, index, one) != S_OK) null
                 else one.value?.let { item -> try { displayName(item) } finally { release(item) } }
             }
-            if (paths.isEmpty() && counter.getInt(0L) > 0) unavailable("IShellItem.GetDisplayName returned no file-system paths") else paths
+            if (paths.isEmpty() && count > 0) unavailable("IShellItem.GetDisplayName returned no file-system paths")
+            paths
         } finally { release(items) }
     }
 
@@ -285,6 +333,13 @@ internal object WindowsCommonDialog {
 
     internal fun invoke(instance: Pointer, slot: Int, vararg args: Any?): Int =
         function(instance, slot).invokeInt(arrayOf<Any?>(instance, *args))
+
+    /** IShellItemArray::GetItemAt is the one out-parameter method whose index precedes the out ptr. */
+    internal fun itemAtArguments(instance: Pointer, index: Int, out: PointerByReference): Array<Any?> =
+        arrayOf(instance, index, out)
+
+    private fun invokeIndexedOut(instance: Pointer, slot: Int, index: Int, out: PointerByReference): Int =
+        function(instance, slot).invokeInt(itemAtArguments(instance, index, out))
 
     private fun invokeOut(instance: Pointer, slot: Int, out: PointerByReference, vararg extra: Any?): Int =
         function(instance, slot).invokeInt(arrayOf<Any?>(instance, out, *extra))

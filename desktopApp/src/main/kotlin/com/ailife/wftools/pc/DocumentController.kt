@@ -6,6 +6,8 @@ import com.ailife.wftools.pc.preview.*
 import com.ailife.wftools.pc.render.PreviewCaptureExporter
 import com.ailife.wftools.pc.render.RenderSession
 import com.ailife.wftools.pc.render.ThumbnailExporter
+import com.ailife.wftools.pc.market.MarketAccountApi
+import com.ailife.wftools.pc.market.MarketSession
 import com.ailife.wftools.agent.model.AgentFeatureSettings
 import com.ailife.wftools.agent.storage.AgentConversationRepository
 import com.ailife.wftools.agent.storage.AgentProviderStore
@@ -378,6 +380,9 @@ class EditorApplicationModel(val scope: CoroutineScope, val preferences: EditorP
     var marketOpen by mutableStateOf(false)
     /** Created on first use so a user who never opens the market pays nothing for it. */
     val marketApi: com.ailife.wftools.pc.market.WatchMarketApi by lazy { com.ailife.wftools.pc.market.WatchMarketApi() }
+    /** Account tokens live only for this running desktop session; passwords are never retained. */
+    val marketAccountApi: MarketAccountApi by lazy { MarketAccountApi() }
+    var marketSession by mutableStateOf<MarketSession?>(null)
     /** 市场下载落到当前用户的下载目录下的 wftools 文件夹，找不到下载目录时回退到应用数据目录。 */
     val marketDownloadRoot: Path get() = marketDownloadDirectory()
     var copiedScriptContext: Pair<String,String>? = null

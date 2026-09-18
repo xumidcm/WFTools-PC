@@ -128,6 +128,16 @@ private fun clampedSize(preference: WindowPreferences): DpSize {
                 onOpenWatch = { path -> app.open(listOf(path)) },
                 onClose = onClose,
                 onError = { app.error = it },
+                recentProjects = app.recentProjects,
+                owner = window,
+                accountApi = app.marketAccountApi,
+                marketSession = app.marketSession,
+                onSessionChange = { app.marketSession = it },
+                onOpenRecent = { recent ->
+                    if (recent.draftId != null) app.recover(recent.draftId)
+                    else runCatching { app.open(listOf(Path.of(recent.path))) }
+                        .onFailure { app.error = "无法打开最近表盘：${it.message}" }
+                },
             )
         }
     }

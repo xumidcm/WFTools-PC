@@ -2,6 +2,8 @@ package com.ailife.wftools.pc
 
 import com.ailife.wftools.pc.platform.DesktopOperatingSystem
 import com.ailife.wftools.pc.platform.desktopOperatingSystem
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 
 /**
  * 表盘市场入口。桌面端目前只接入 Watchmaker Community v2，并把下载后的
@@ -13,6 +15,10 @@ object WatchMarket {
 
     /** Watchmaker Community v2 的 API 根地址。 */
     const val API_ROOT: String = "https://jbwatchface.ai-life.xyz/api"
+
+    /** The public detail route for one face, kept separate from the JSON API endpoint. */
+    fun watchFaceUrl(id: String): String =
+        HOME_URL.trimEnd('/') + "/watchfaces/" + URLEncoder.encode(id, StandardCharsets.UTF_8).replace("+", "%20")
 }
 
 /** 下载完成后可供用户选择的动作。 */

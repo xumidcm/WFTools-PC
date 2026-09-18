@@ -2,7 +2,10 @@ package com.ailife.wftools.pc
 
 import com.ailife.wftools.pc.platform.DesktopOperatingSystem
 import com.ailife.wftools.pc.platform.WindowsCommonDialog
+import com.ailife.wftools.pc.platform.ModernDialogResult
 import com.ailife.wftools.pc.platform.fileDialogFilters
+import com.sun.jna.Pointer
+import com.sun.jna.ptr.PointerByReference
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -89,6 +92,21 @@ class NativeFileDialogTest {
             System.getProperty("os.name").orEmpty().contains("Win", ignoreCase = true),
             WindowsCommonDialog.usable,
         )
+    }
+
+    @Test fun `a modern dialog that was shown never falls back to the legacy picker`() {
+        assertFalse(WindowsCommonDialog.shouldFallbackToLegacy(ModernDialogResult.Completed(emptyList())))
+        assertFalse(WindowsCommonDialog.shouldFallbackToLegacy(ModernDialogResult.Completed(listOf(java.nio.file.Path.of("C:/face.watch")))))
+        assertTrue(WindowsCommonDialog.shouldFallbackToLegacy(ModernDialogResult.Unavailable))
+    }
+
+    @Test fun `shell item array get item at passes the index before the output pointer`() {
+        val instance = Pointer.createConstant(1L)
+        val output = PointerByReference()
+        val arguments = WindowsCommonDialog.itemAtArguments(instance, 3, output)
+        assertSame(instance, arguments[0])
+        assertEquals(3, arguments[1])
+        assertSame(output, arguments[2])
     }
 
     @Test fun `every desktop platform has a reveal label`() {

@@ -66,10 +66,10 @@ private fun nativeFileDialog(owner: Component?, title: String, mode: Int): FileD
 private fun chooseOpenWithNativeDialog(owner: Component?, title: String, extensions: String? = null): List<Path> {
     // The modern shell dialog honours file-type filters and inherits the app icon; the legacy
     // AWT dialog does neither on Windows, so prefer the former and fall back when unavailable.
-    val modern = WindowsCommonDialog.show(
+    val modern = WindowsCommonDialog.showWithOutcome(
         owner, title, fileDialogFilters(extensions, title), multiple = true,
     )
-    if (modern != null) return modern
+    if (modern is ModernDialogResult.Completed) return modern.paths
     logModernDialogFallback(title)
     val dialog = nativeFileDialog(owner, title, FileDialog.LOAD).apply {
         isMultipleMode = true
@@ -81,6 +81,7 @@ private fun chooseOpenWithNativeDialog(owner: Component?, title: String, extensi
     return dialog.files?.map { it.toPath() }.orEmpty()
 }
 fun chooseWatchFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, DesktopI18n.text("打开 WatchMaker 表盘"), "watch")
+fun chooseImageFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, "选择头像图片", "png,jpg,jpeg,webp")
 fun chooseAssets(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, DesktopI18n.text("导入图片、视频或字体"), "png,jpg,jpeg,gif,webp,bmp,mp4,webm,mov,m4v,avi,mkv,ttf,otf,fnt")
 fun chooseAudioFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, DesktopI18n.text("添加音频资源"), "mp3,wav,ogg,m4a,aac,flac")
 fun chooseAgentFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, "添加 Agent 附件")
@@ -89,7 +90,7 @@ fun chooseSavePath(owner: Component?, source: Path?, title: String, allowExistin
     val safeName = title.replace(Regex("[<>:\"/\\\\|?*]"), "_")
     val suggested = source?.fileName?.toString() ?: "$safeName.watch"
     // The save dialog asks about overwriting on its own, so no extra confirmation here.
-    val modern = WindowsCommonDialog.show(
+    val modern = WindowsCommonDialog.showWithOutcome(
         owner,
         DesktopI18n.text(if (allowExisting) "保存 WatchMaker 表盘" else "导出受保护表盘"),
         fileDialogFilters("watch", "WatchMaker 表盘"),
@@ -97,7 +98,7 @@ fun chooseSavePath(owner: Component?, source: Path?, title: String, allowExistin
         defaultExtension = "watch",
         save = true,
     )
-    if (modern != null) return modern.firstOrNull()
+    if (modern is ModernDialogResult.Completed) return modern.paths.firstOrNull()
     logModernDialogFallback(title)
     val dialog = nativeFileDialog(owner, DesktopI18n.text("保存 WatchMaker 表盘"), FileDialog.SAVE).apply {
         filenameFilter = FilenameFilter { _, name -> name.endsWith(".watch", true) }
@@ -112,7 +113,7 @@ fun chooseSavePath(owner: Component?, source: Path?, title: String, allowExistin
 }
 fun chooseCapturePath(owner: Component?, title: String, extension: String, description: String): Path? {
     val suggested = title.replace(Regex("[<>:\"/\\\\|?*]"), "_") + "." + extension
-    val modern = WindowsCommonDialog.show(
+    val modern = WindowsCommonDialog.showWithOutcome(
         owner,
         DesktopI18n.text(description),
         fileDialogFilters(extension, DesktopI18n.text(description)),
@@ -120,7 +121,7 @@ fun chooseCapturePath(owner: Component?, title: String, extension: String, descr
         defaultExtension = extension,
         save = true,
     )
-    if (modern != null) return modern.firstOrNull()
+    if (modern is ModernDialogResult.Completed) return modern.paths.firstOrNull()
     logModernDialogFallback(description)
     val dialog = nativeFileDialog(owner, DesktopI18n.text(description), FileDialog.SAVE).apply {
         filenameFilter = FilenameFilter { _, name -> name.endsWith(".$extension", true) }

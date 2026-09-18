@@ -126,15 +126,15 @@ class HomeAndAssetsTest {
         compose.runOnIdle{assertFalse(model.canvasInput.rightButtonPan);assertFalse(model.canvasInput.snapping);assertTrue(model.canvasInput.middleButtonPan)}
     }
 
-    @Test fun `home offers a market entry that opens the store window or the web app`() {
+    @Test fun `home offers a market entry that opens the store window without duplicating the web action`() {
         val model=EditorApplicationModel(scope,EditorPreferences(temp.newFolder("market-prefs").toPath()),WatchDocumentStore(temp.newFolder("market-work").toPath())).also{app=it}
         var marketOpened=false
         val opened=mutableListOf<String>()
         compose.setContent{WFToolsTheme(false){Surface(Modifier.fillMaxSize()){HomeContent(model,{}, {},Modifier.fillMaxSize(),openExternal={opened+=it},onMarket={marketOpened=true})}}}
         compose.onNodeWithTag("home-watch-market").assertExists().performClick()
         compose.runOnIdle{assertTrue("点击卡片应打开市场窗口",marketOpened)}
-        compose.onNodeWithTag("home-market-web").performClick()
-        compose.runOnIdle{assertEquals(listOf(WatchMarket.HOME_URL),opened)}
+        compose.onNodeWithTag("home-market-web").assertDoesNotExist()
+        compose.runOnIdle{assertTrue("首页不应再偷偷打开浏览器",opened.isEmpty())}
     }
 
     @Test fun `home keeps header and footer fixed while only the recent list scrolls`() {

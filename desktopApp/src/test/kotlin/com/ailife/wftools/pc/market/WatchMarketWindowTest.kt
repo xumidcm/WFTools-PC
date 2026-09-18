@@ -49,6 +49,22 @@ class WatchMarketWindowTest {
         assertEquals("预览资源必须统一为 512×512 方形", 512, MARKET_PREVIEW_SIZE_PX)
     }
 
+    @Test fun `the market account button opens the native login panel`() {
+        val accountApi = MarketAccountApi("https://example.test/api", MarketAccountTransport { request ->
+            val body = if (request.url.endsWith("/config")) "{\"features\":{\"registration_enabled\":true,\"max_upload_size_mb\":20}}" else "{}"
+            MarketAccountResponse(200, body.toByteArray(StandardCharsets.UTF_8), "application/json")
+        })
+        compose.setContent { WFToolsTheme(false) { Surface(Modifier.fillMaxSize()) {
+            WatchMarketWindow(api(), temp.newFolder().toPath(), {}, {}, accountApi = accountApi)
+        } } }
+        compose.onNodeWithTag("market-account-button").assertExists().performClick()
+        compose.onNodeWithTag("market-account-dialog").assertExists()
+        compose.onNodeWithTag("market-auth-username").assertExists()
+        compose.onNodeWithTag("market-auth-password").assertExists()
+        compose.onNodeWithTag("market-login-submit").assertExists()
+        compose.onNodeWithTag("market-register-tab").assertExists()
+    }
+
     @Test fun `the listing renders cards from the api`() {
         compose.setContent { WFToolsTheme(false) { Surface(Modifier.fillMaxSize()) {
             WatchMarketWindow(api(), temp.newFolder().toPath(), {}, {})
@@ -105,7 +121,7 @@ class WatchMarketWindowTest {
         assertTrue("滚动到底部必须请求第二批", requested.any { it.contains("page=2") })
     }
 
-    @Test fun `protected market item opens without a protection warning`() {
+    @Test fun `protected market item shows an explicit protection badge`() {
         val protectedBody = listBody.replace("\"created_at\"", "\"wm_protected\":true,\"created_at\"")
         compose.setContent { WFToolsTheme(false) { Surface(Modifier.fillMaxSize()) {
             WatchMarketWindow(api(protectedBody), temp.newFolder().toPath(), {}, {})
@@ -113,7 +129,33 @@ class WatchMarketWindowTest {
         compose.waitUntil(5000) { compose.onAllNodesWithTag("market-card-a1").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("market-card-a1").performClick()
         compose.waitUntil(5000) { compose.onAllNodesWithTag("market-detail").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("受保护表盘", substring = true).assertDoesNotExist()
+        compose.onNodeWithTag("market-detail-protected").assertExists()
+        compose.onNodeWithText("受保护表盘", substring = true).assertExists()
+    }
+
+    @Test fun `detail dialog offers the selected face page in the browser`() {
+        val detailBody = """
+            {"id":"a1","name":"魈","screen_type":"square","category":{"name":"Analog"},
+             "download_count":12,"favorite_count":1,"views":33,"tags":["极简"],"wm_version":"1.0",
+             "created_at":"2026-09-17T14:48:45.639Z","description":"detail"}
+        """.trimIndent()
+        val transport = MarketTransport { url, _ ->
+            when {
+                url.contains("/watchfaces?") -> listBody.toByteArray(StandardCharsets.UTF_8)
+                url.endsWith("/watchfaces/a1") -> detailBody.toByteArray(StandardCharsets.UTF_8)
+                url.endsWith("/categories") -> "{\"data\":[]}".toByteArray(StandardCharsets.UTF_8)
+                else -> ByteArray(0)
+            }
+        }
+        val opened = mutableListOf<String>()
+        compose.setContent { WFToolsTheme(false) { Surface(Modifier.fillMaxSize()) {
+            WatchMarketWindow(WatchMarketApi(transport), temp.newFolder().toPath(), {}, {}, openExternal = { opened += it })
+        } } }
+        compose.waitUntil(5000) { compose.onAllNodesWithTag("market-card-a1").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("market-card-a1").performClick()
+        compose.waitUntil(5000) { compose.onAllNodesWithTag("market-detail").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("market-detail-open-web").assertExists().performClick()
+        compose.runOnIdle { assertEquals(listOf(WatchMarket.watchFaceUrl("a1")), opened) }
     }
 
     @Test fun `a download dialog exposes every action the platform supports`() {

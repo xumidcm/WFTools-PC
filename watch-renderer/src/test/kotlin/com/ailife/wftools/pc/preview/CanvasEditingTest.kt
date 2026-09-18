@@ -50,6 +50,7 @@ class CanvasEditingTest {
         assertEquals(setOf("selected"), canvasDragTargets(CanvasOperationMode.SELECT_THEN_DRAG, "other", setOf("selected")))
         assertEquals(setOf("a", "b"), canvasDragTargets(CanvasOperationMode.SELECT_THEN_DRAG, null, setOf("a", "b")))
         assertTrue(canvasDragTargets(CanvasOperationMode.SELECT_THEN_DRAG, "first", emptySet()).isEmpty())
+        assertEquals(setOf("first"), canvasDragTargets(CanvasOperationMode.SELECT_THEN_DRAG, "first", emptySet(), ctrlFineMove = true))
     }
 
     @Test fun `released live edit remains visible until a newer document revision takes over`() {
@@ -183,7 +184,23 @@ class CanvasEditingTest {
         assertFalse(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.SELECT_THEN_DRAG,setOf("layer")))
         assertFalse(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.DIRECT_DRAG,emptySet()))
         assertTrue(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.DIRECT_DRAG,setOf("layer"),spaceDown=true))
-        assertTrue(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.DIRECT_DRAG,setOf("layer"),ctrlPrimary=true))
+        assertFalse("Ctrl + 已命中元素应进入低灵敏度移动，而不是平移画布",
+            canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.DIRECT_DRAG,setOf("layer"),hitId="layer",ctrlPrimary=true))
+        assertTrue("Ctrl + 空白画布仍可平移",
+            canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.DIRECT_DRAG,emptySet(),hitId=null,ctrlPrimary=true))
+    }
+
+    @Test fun `ctrl drag uses a quarter sensitivity and disables snapping only for the gesture`() {
+        assertEquals(1.0, canvasMoveSensitivity(ctrlFineMove = false), 0.0)
+        assertEquals(0.25, canvasMoveSensitivity(ctrlFineMove = true), 0.0)
+        assertTrue(canvasSnappingEnabled(configured = true, ctrlFineMove = false, alt = false))
+        assertFalse(canvasSnappingEnabled(configured = true, ctrlFineMove = true, alt = false))
+        assertTrue("释放 Ctrl 后应恢复用户设置", canvasSnappingEnabled(configured = true, ctrlFineMove = false, alt = false))
+        assertFalse(canvasCtrlFineMove(selection = emptySet(), hitId = null, ctrlPrimary = true, spaceDown = false))
+        assertTrue(canvasCtrlFineMove(selection = setOf("layer"), hitId = null, ctrlPrimary = true, spaceDown = false))
+        assertTrue(canvasCtrlFineMove(selection = emptySet(), hitId = "layer", ctrlPrimary = true, spaceDown = false))
+        assertTrue(canvasCtrlFineMove(mode = CanvasOperationMode.SELECT_THEN_DRAG, selection = emptySet(), hitId = "layer", ctrlPrimary = true, spaceDown = false))
+        assertFalse(canvasCtrlFineMove(mode = CanvasOperationMode.SELECT_THEN_DRAG, selection = emptySet(), hitId = null, ctrlPrimary = true, spaceDown = false))
     }
 
     @Test fun `a still touch hold becomes the context menu because touch has no right button`() {

@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -17,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -24,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ailife.wftools.pc.MarketDownloadAction
+import com.ailife.wftools.pc.RecentProject
 import com.ailife.wftools.pc.Text
 import com.ailife.wftools.pc.WatchMarket
 import com.ailife.wftools.pc.marketWatchActions
@@ -36,6 +39,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.Toolkit
+import java.awt.Component
 import java.awt.datatransfer.StringSelection
 import java.nio.file.Files
 import java.nio.file.Path
@@ -62,8 +66,15 @@ fun WatchMarketWindow(
     onClose: () -> Unit,
     onError: (String) -> Unit = {},
     openExternal: (String) -> Unit = ::openExternalUrl,
+    recentProjects: List<RecentProject> = emptyList(),
+    owner: Component? = null,
+    accountApi: MarketAccountApi? = null,
+    marketSession: MarketSession? = null,
+    onSessionChange: (MarketSession?) -> Unit = {},
+    onOpenRecent: (RecentProject) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
+    val resolvedAccountApi = accountApi ?: remember { MarketAccountApi() }
     var sort by remember { mutableStateOf(MarketSort.LATEST) }
     var screenType by remember { mutableStateOf(MarketScreenType.ANY) }
     var category by remember { mutableStateOf("") }
@@ -79,6 +90,9 @@ fun WatchMarketWindow(
     var selected by remember { mutableStateOf<MarketItem?>(null) }
     var downloading by remember { mutableStateOf<String?>(null) }
     var finished by remember { mutableStateOf<MarketDownload?>(null) }
+    var accountOpen by remember { mutableStateOf(false) }
+    var session by remember(marketSession) { mutableStateOf(marketSession) }
+    var unreadCount by remember { mutableIntStateOf(0) }
 
     val gridState = rememberLazyGridState()
 
@@ -124,6 +138,15 @@ fun WatchMarketWindow(
             Spacer(Modifier.weight(1f))
             OutlinedButton(onClick = { runCatching { openExternal(WatchMarket.HOME_URL) }.onFailure { onError("无法打开浏览器：${it.message}") } }, modifier = Modifier.testTag("market-open-web")) {
                 Icon(Icons.Default.OpenInNew, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("在浏览器打开")
+            }
+            BadgedBox(
+                badge = { if (unreadCount > 0) Badge { Text(unreadCount.coerceAtMost(99).toString()) } },
+            ) {
+                OutlinedButton(onClick = { accountOpen = true }, modifier = Modifier.testTag("market-account-button")) {
+                    Icon(Icons.Default.AccountCircle, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(session?.user?.username ?: "登录")
+                }
             }
             IconButton(onClick = { scope.launch { load(reset = true) } }, enabled = !loading) { Icon(Icons.Default.Refresh, "刷新") }
         }
@@ -186,6 +209,8 @@ fun WatchMarketWindow(
             api = api,
             downloading = downloading == item.id,
             onDismiss = { selected = null },
+            openExternal = { url -> runCatching { openExternal(url) }.onFailure { onError("无法打开浏览器：${it.message}") } },
+            onError = onError,
             onDownload = {
                 downloading = item.id
                 scope.launch {
@@ -216,6 +241,23 @@ fun WatchMarketWindow(
                     .onFailure { onError("无法复制路径：${it.message}") }
             },
             onError = onError,
+        )
+    }
+
+    if (accountOpen) {
+        MarketAccountDialog(
+            api = resolvedAccountApi,
+            session = session,
+            recentProjects = recentProjects,
+            owner = owner,
+            onSessionChange = { next ->
+                session = next
+                onSessionChange(next)
+            },
+            onUnreadChange = { unreadCount = it },
+            onOpenRecent = onOpenRecent,
+            openExternal = { url -> runCatching { openExternal(url) }.onFailure { onError("无法打开浏览器：${it.message}") } },
+            onDismiss = { accountOpen = false },
         )
     }
 }
@@ -310,7 +352,7 @@ private fun MarketLoadMoreFooter(
     var bitmap by remember(item.id) { mutableStateOf<ImageBitmap?>(null) }
     var loading by remember(item.id) { mutableStateOf(true) }
     LaunchedEffect(item.id) {
-        val cached = previewCache[item.id]
+        val cached = cachedPreview(item.id)
         if (cached != null) {
             bitmap = cached
             loading = false
@@ -318,7 +360,7 @@ private fun MarketLoadMoreFooter(
         }
         // Fetch and decode off the main thread: a 512x512 decode per card would stutter the grid.
         val decoded = withContext(Dispatchers.IO) { api.preview(item.id)?.let(::normalizePreview) }
-        bitmap = decoded?.also { previewCache[item.id] = it }
+        bitmap = decoded?.also { cachePreview(item.id, it) }
         loading = false
     }
     Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant).clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)), contentAlignment = Alignment.Center) {
@@ -361,29 +403,114 @@ private fun normalizePreview(bytes: ByteArray): ImageBitmap? = runCatching {
 }.getOrNull()
 
 /** Bounded in-memory preview cache; cards are re-composed when the list scrolls. */
-private val previewCache = java.util.Collections.synchronizedMap(LinkedHashMap<String, ImageBitmap>())
+private const val PREVIEW_CACHE_MAX_ENTRIES = 48
+private val previewCache = object : LinkedHashMap<String, ImageBitmap>(PREVIEW_CACHE_MAX_ENTRIES + 1, .75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap>?): Boolean = size > PREVIEW_CACHE_MAX_ENTRIES
+}
 
-@Composable private fun MarketDetailDialog(item: MarketItem, api: WatchMarketApi, downloading: Boolean, onDismiss: () -> Unit, onDownload: () -> Unit) {
+private fun cachedPreview(id: String): ImageBitmap? = synchronized(previewCache) { previewCache[id] }
+
+private fun cachePreview(id: String, bitmap: ImageBitmap) {
+    synchronized(previewCache) { previewCache[id] = bitmap }
+}
+
+@Composable private fun MarketDetailDialog(
+    item: MarketItem,
+    api: WatchMarketApi,
+    downloading: Boolean,
+    onDismiss: () -> Unit,
+    onDownload: () -> Unit,
+    openExternal: (String) -> Unit,
+    onError: (String) -> Unit,
+) {
     var detail by remember(item.id) { mutableStateOf(item) }
-    LaunchedEffect(item.id) { withContext(Dispatchers.IO) { runCatching { api.detail(item.id) } }.onSuccess { it?.let { loaded -> detail = loaded } } }
+    LaunchedEffect(item.id) {
+        withContext(Dispatchers.IO) { runCatching { api.detail(item.id) } }.onSuccess { it?.let { loaded ->
+            // Keep the list flag visible if an older detail endpoint omits wm_protected.
+            detail = loaded.copy(protected = loaded.protected || item.protected)
+        } }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag("market-detail"),
-        title = { Text(detail.name) },
-        text = { Column(Modifier.widthIn(min = 380.dp, max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            MarketPreview(detail, api, Modifier.widthIn(max = 280.dp).aspectRatio(1f).clip(RoundedCornerShape(10.dp)))
-            if (detail.author.isNotBlank()) Text("作者 · ${detail.author}")
-            if (detail.category.isNotBlank()) Text("分类 · ${detail.category}", style = MaterialTheme.typography.bodySmall)
-            if (detail.screenType.isNotBlank()) Text("屏幕 · ${detail.screenType}", style = MaterialTheme.typography.bodySmall)
-            if (detail.version.isNotBlank()) Text("版本 · ${detail.version}", style = MaterialTheme.typography.bodySmall)
-            if (detail.createdAt.isNotBlank()) Text("发布 · ${detail.createdAt}", style = MaterialTheme.typography.bodySmall)
-            Text("下载 ${detail.downloadCount} · 收藏 ${detail.favoriteCount} · 浏览 ${detail.views}", style = MaterialTheme.typography.bodySmall)
-            if (detail.tags.isNotEmpty()) Text("标签 · ${detail.tags.joinToString(", ")}", style = MaterialTheme.typography.bodySmall)
-            if (detail.description.isNotBlank()) { HorizontalDivider(); Text(detail.description, style = MaterialTheme.typography.bodyMedium) }
-        } },
-        confirmButton = { Button(onClick = onDownload, enabled = !downloading) { if (downloading) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)) }; Text(if (downloading) "下载中…" else "下载 .watch") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+        title = {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+                    Icon(Icons.Default.Watch, null, Modifier.padding(8.dp).size(22.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(detail.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("表盘详情", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (detail.protected) {
+                    Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = RoundedCornerShape(50), modifier = Modifier.testTag("market-detail-protected")) {
+                        Row(Modifier.padding(horizontal = 9.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Icon(Icons.Default.Lock, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onTertiaryContainer)
+                            Text("受保护表盘", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                        }
+                    }
+                }
+            }
+        },
+        text = {
+            Column(Modifier.widthIn(min = 420.dp, max = 640.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Surface(
+                    Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .46f),
+                    tonalElevation = 1.dp,
+                ) {
+                    Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
+                        MarketPreview(detail, api, Modifier.size(280.dp).clip(RoundedCornerShape(12.dp)))
+                    }
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (detail.author.isNotBlank()) MarketDetailInfo(Icons.Default.Person, "作者", detail.author)
+                    if (detail.category.isNotBlank()) MarketDetailInfo(Icons.Default.Category, "分类", detail.category)
+                    if (detail.screenType.isNotBlank()) MarketDetailInfo(Icons.Default.Smartphone, "屏幕", detail.screenType)
+                    if (detail.version.isNotBlank()) MarketDetailInfo(Icons.Default.NewReleases, "版本", detail.version)
+                    if (detail.createdAt.isNotBlank()) MarketDetailInfo(Icons.Default.CalendarToday, "发布", detail.createdAt)
+                    MarketDetailInfo(Icons.Default.Download, "下载", detail.downloadCount.toString())
+                    MarketDetailInfo(Icons.Default.Favorite, "收藏", detail.favoriteCount.toString())
+                    MarketDetailInfo(Icons.Default.Visibility, "浏览", detail.views.toString())
+                    if (detail.tags.isNotEmpty()) MarketDetailInfo(Icons.Default.Label, "标签", detail.tags.joinToString(", "))
+                }
+                if (detail.protected) {
+                    Surface(Modifier.fillMaxWidth().testTag("market-detail-protected-note"), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = .72f)) {
+                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.Lock, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onTertiaryContainer)
+                            Text("该表盘带有受保护内容，下载后仍按当前的解密权限处理。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                        }
+                    }
+                }
+                if (detail.description.isNotBlank()) {
+                    HorizontalDivider()
+                    Text(detail.description, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        },
+        confirmButton = {
+            Row(Modifier.fillMaxWidth().testTag("market-detail-actions"), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { runCatching { openExternal(WatchMarket.watchFaceUrl(detail.id)) }.onFailure { onError("无法打开浏览器：${it.message}") } }, modifier = Modifier.testTag("market-detail-open-web")) {
+                    Icon(Icons.Default.OpenInNew, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text("在浏览器打开")
+                }
+                TextButton(onClick = onDismiss) { Text("关闭") }
+                Button(onClick = onDownload, enabled = !downloading) {
+                    if (downloading) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)) }
+                    Text(if (downloading) "下载中…" else "下载 .watch")
+                }
+            }
+        },
+        dismissButton = {},
     )
+}
+
+@Composable private fun MarketDetailInfo(icon: ImageVector, label: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(icon, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.primary)
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
 }
 
 /**

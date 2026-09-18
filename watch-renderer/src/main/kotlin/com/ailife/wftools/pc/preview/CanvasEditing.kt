@@ -18,9 +18,17 @@ import kotlin.math.round
  * user picked in the sidebar. Without a selection, direct drag adopts the layer under
  * the pointer while select-then-drag only selects it.
  */
-fun canvasDragTargets(mode: CanvasOperationMode, hitId: String?, selection: Set<String>): Set<String> = when (mode) {
+fun canvasDragTargets(
+    mode: CanvasOperationMode,
+    hitId: String?,
+    selection: Set<String>,
+    ctrlFineMove: Boolean = false,
+): Set<String> = when (mode) {
     CanvasOperationMode.DIRECT_DRAG -> if (selection.isNotEmpty()) selection else setOfNotNull(hitId)
-    CanvasOperationMode.SELECT_THEN_DRAG -> selection
+    // Select-then-drag normally leaves an empty selection as a pan gesture. Ctrl is an
+    // explicit precision override, however, so a hit layer must become the owner of that
+    // gesture even before the ordinary selection command has committed.
+    CanvasOperationMode.SELECT_THEN_DRAG -> if (ctrlFineMove && selection.isEmpty()) setOfNotNull(hitId) else selection
 }
 
 /** True when a press adopts the layer under the pointer instead of merely selecting it. */
@@ -58,6 +66,30 @@ fun canvasWheelAction(hitId: String?, selectedIds: Set<String>, ctrl: Boolean, i
     else -> CanvasWheelAction.ZOOM_WORKSPACE
 }
 
+/**
+ * Ctrl-drag is a precision modifier when the pointer owns at least one layer.  Empty canvas
+ * remains a temporary pan gesture, preserving the desktop navigation shortcut.
+ */
+fun canvasCtrlFineMove(
+    mode: CanvasOperationMode = CanvasOperationMode.DIRECT_DRAG,
+    selection: Set<String>,
+    hitId: String?,
+    ctrlPrimary: Boolean,
+    spaceDown: Boolean,
+): Boolean = ctrlPrimary && !spaceDown && canvasDragTargets(mode, hitId, selection, ctrlFineMove = true).isNotEmpty()
+
+/** Keep pointer movement controllable without changing the persisted canvas preferences. */
+fun canvasMoveSensitivity(ctrlFineMove: Boolean): Double = if (ctrlFineMove) 0.25 else 1.0
+
+fun canvasMoveDelta(delta: Point, ctrlFineMove: Boolean): Point {
+    val factor = canvasMoveSensitivity(ctrlFineMove)
+    return Point(delta.x * factor, delta.y * factor)
+}
+
+/** Alt remains the explicit per-gesture override; Ctrl precision also suppresses auto-snap. */
+fun canvasSnappingEnabled(configured: Boolean, ctrlFineMove: Boolean, alt: Boolean): Boolean =
+    configured && !ctrlFineMove && !alt
+
 fun canvasDragPans(
     button: CanvasDragButton,
     mode: CanvasOperationMode,
@@ -70,7 +102,9 @@ fun canvasDragPans(
 ): Boolean = when (button) {
     CanvasDragButton.TERTIARY -> middleButtonPanEnabled
     CanvasDragButton.SECONDARY -> rightButtonPanEnabled
-    CanvasDragButton.PRIMARY -> spaceDown || ctrlPrimary || (mode == CanvasOperationMode.SELECT_THEN_DRAG && selection.isEmpty() && hitId == null)
+    CanvasDragButton.PRIMARY -> spaceDown ||
+        (ctrlPrimary && !canvasCtrlFineMove(mode, selection, hitId, ctrlPrimary = true, spaceDown = spaceDown)) ||
+        (mode == CanvasOperationMode.SELECT_THEN_DRAG && selection.isEmpty() && hitId == null)
 }
 
 fun isCanvasPanGesture(tertiaryPressed: Boolean, spaceDown: Boolean, ctrlPrimary: Boolean): Boolean =

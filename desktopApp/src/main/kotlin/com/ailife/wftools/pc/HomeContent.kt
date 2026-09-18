@@ -105,7 +105,7 @@ internal fun performFileAssociationAction(
                     Card(onClick=onOpen,modifier=Modifier.weight(1f).testTag("home-open"),shape=RoundedCornerShape(16.dp),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.surfaceVariant)) {
                         Row(Modifier.fillMaxWidth().padding(20.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) { Icon(Icons.Default.FolderOpen,null,Modifier.size(30.dp));Column { Text("打开表盘",fontWeight=FontWeight.Bold);Text("选择或拖入 .watch 文件",style=MaterialTheme.typography.bodySmall) } }
                     }
-                    MarketEntryCard(onMarket,Modifier.weight(1f),openExternal)
+                    MarketEntryCard(onMarket,Modifier.weight(1f))
                 }
                 Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                     Text("最近打开",Modifier.weight(1f),style=MaterialTheme.typography.titleLarge)
@@ -489,7 +489,7 @@ internal fun performFileAssociationAction(
         HomeCanvasInputSwitch("自动吸附",canvasInput.snapping,"home-automatic-snapping-toggle"){onCanvasInput(canvasInput.copy(snapping=it))}
         HomeCanvasInputSwitch("变换控制点",canvasInput.showTransformHandles,"home-transform-handles-toggle"){onCanvasInput(canvasInput.copy(showTransformHandles=it))}
         HomeCanvasInputSwitch("显示操作状态提示",canvasInput.showOperationStatus,"home-operation-status-toggle"){onCanvasInput(canvasInput.copy(showOperationStatus=it))}
-        Text("鼠标直拖模式：侧边栏选中的图层优先，按住画布任意位置拖动都会移动当前选区；没有选中时按住某个图层即可选中并直接移动。\n先选后拖模式与直拖相同，区别是没有选中时按住图层只选中、不移动。\n单击其它图层会改选它，单击空白处清空选择。\n中键或右键拖动：对应开关开启时平移整个表盘。\n滚轮：开关开启时可缩放光标下的选中元素；关闭后始终缩放整个表盘。\n自动吸附会在移动和变换时对齐画布及其他元素；变换控制点可显示八向缩放点和旋转拉杆；操作状态提示只用于显示耗时任务进度。\n空格 + 左键或 Ctrl + 左键：临时拖动画布；Ctrl + 滚轮：始终缩放整个表盘。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("鼠标直拖模式：侧边栏选中的图层优先，按住画布任意位置拖动都会移动当前选区；没有选中时按住某个图层即可选中并直接移动。\n先选后拖模式与直拖相同，区别是没有选中时按住图层只选中、不移动。\n单击其它图层会改选它，单击空白处清空选择。\n中键或右键拖动：对应开关开启时平移整个表盘。\n滚轮：开关开启时可缩放光标下的选中元素；关闭后始终缩放整个表盘。\n自动吸附会在移动和变换时对齐画布及其他元素；变换控制点可显示八向缩放点和旋转拉杆；操作状态提示只用于显示耗时任务进度。\n空格 + 左键：临时拖动画布；按住 Ctrl 拖动图层会降低移动灵敏度并暂时关闭自动吸附；空白处按住 Ctrl 仍可临时平移画布；Ctrl + 滚轮：始终缩放整个表盘。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider()
         Text("文件格式关联",style=MaterialTheme.typography.titleSmall)
         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
@@ -517,16 +517,11 @@ internal fun performFileAssociationAction(
 }
 
 /** 首页的市场入口卡片：与「创建 / 打开」同排并排在最右。浏览器入口只在市场窗口里提供。 */
-@Composable private fun MarketEntryCard(onOpenMarket:()->Unit,modifier:Modifier=Modifier,openExternal:(String)->Unit=::openExternalUrl) {
+@Composable private fun MarketEntryCard(onOpenMarket:()->Unit,modifier:Modifier=Modifier) {
     Card(modifier=modifier.testTag("home-watch-market"),onClick=onOpenMarket,shape=RoundedCornerShape(16.dp),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.tertiaryContainer)) {
-        Column(Modifier.fillMaxWidth().padding(14.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
-          Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
-            Icon(Icons.Default.Storefront,null,Modifier.size(30.dp))
-            Column { Text("表盘市场",fontWeight=FontWeight.Bold);Text("下载后可直接打开编辑",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha=.8f)) }
-          }
-          TextButton(onClick={runCatching{openExternal(WatchMarket.HOME_URL)}},modifier=Modifier.testTag("home-market-web"),contentPadding=PaddingValues(horizontal=4.dp,vertical=0.dp)) {
-            Icon(Icons.Default.OpenInNew,null,Modifier.size(15.dp));Spacer(Modifier.width(4.dp));Text("在浏览器打开")
-          }
+        Row(Modifier.fillMaxWidth().padding(20.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
+          Icon(Icons.Default.Storefront,null,Modifier.size(30.dp))
+          Column { Text("表盘市场",fontWeight=FontWeight.Bold);Text("下载后可直接打开编辑",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha=.8f)) }
         }
     }
 }

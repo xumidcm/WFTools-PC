@@ -465,7 +465,6 @@ fun WatchPreview(
                         val downAt = System.currentTimeMillis()
                         val ctrlAtDown = currentEvent.keyboardModifiers.isCtrlPressed
                         val shiftAtDown = currentEvent.keyboardModifiers.isShiftPressed
-                        val ctrlPanCandidate = ctrlAtDown && downButtons.isPrimaryPressed && !spaceDown
                         val originalWorkspace = currentWorkspace
                         val initialWork = currentWork
                         val startDevice = initialWork.toDevice(Point(down.position.x.toDouble(), down.position.y.toDouble()))
@@ -474,6 +473,16 @@ fun WatchPreview(
                         val hitId = index?.let { currentLayers[it].id }
                         val order = currentLayers.map { it.id }.reversed()
                         val initialSelection = currentSelection
+                        // Ctrl is a precision modifier when this gesture owns a layer. On empty
+                        // canvas it keeps its navigation meaning and pans the workspace.
+                        val ctrlFineMove = canvasCtrlFineMove(
+                            mode = currentMode,
+                            selection = initialSelection.selected,
+                            hitId = hitId,
+                            ctrlPrimary = ctrlAtDown && downButtons.isPrimaryPressed,
+                            spaceDown = spaceDown,
+                        )
+                        val ctrlPanCandidate = ctrlAtDown && downButtons.isPrimaryPressed && !spaceDown && !ctrlFineMove
                         val hardPan = canvasDragPans(
                             CanvasDragButton.PRIMARY,
                             currentMode,initialSelection.selected,hitId=hitId,middleButtonPanEnabled=currentMiddleButtonPanEnabled,rightButtonPanEnabled=currentRightButtonPanEnabled,
@@ -496,7 +505,8 @@ fun WatchPreview(
                         // Ctrl/Shift always edit the selection up front; an empty selection lets
                         // direct drag adopt the pressed layer. An existing plain selection keeps
                         // ownership so a press on a higher layer cannot steal the drag.
-                        val selectionEditedOnPress = ctrlAtDown || shiftAtDown || canvasPressAdoptsHit(currentMode, initialSelection.selected)
+                        val fineMoveAdoptsHit = ctrlFineMove && hitId != null && initialSelection.selected.isEmpty()
+                        val selectionEditedOnPress = (ctrlAtDown && !ctrlFineMove) || fineMoveAdoptsHit || shiftAtDown || canvasPressAdoptsHit(currentMode, initialSelection.selected)
                         if (handle == null && !hardPan && !ctrlPanCandidate && !render.interactionMode && selectionEditedOnPress && hitId != null) {
                             if (expectedSelection != initialSelection) command { select(hitId, order, ctrlAtDown, shiftAtDown) }
                         }
@@ -505,7 +515,7 @@ fun WatchPreview(
                         val targetIds = when {
                             hardPan || ctrlPanCandidate || render.interactionMode -> emptySet()
                             handle != null -> initialSelection.selected
-                            else -> canvasDragTargets(currentMode, hitId, gestureSelection)
+                            else -> canvasDragTargets(currentMode, hitId, gestureSelection, ctrlFineMove = ctrlFineMove)
                         }
                         val originals = currentProject.wmLayers.mapIndexedNotNull { i, layer -> currentLayers[i].id.takeIf { it in targetIds }?.let { it to layer } }
                         val gestureFrame = selectedFrame(targetIds, currentProject, currentLayers, render.frame, document.workDir.toFile())
@@ -580,7 +590,10 @@ fun WatchPreview(
                                             lastTapId = tappedId
                                         }
                                         when {
-                                            ctrlPanCandidate && hitId != null -> command { select(hitId, order, ctrl = true, shift = shiftAtDown) }
+                                            // A Ctrl precision press on an unselected hit already adopted
+                                            // that layer above; toggling it again on release would cancel
+                                            // the selection for a click with no movement.
+                                            ctrlAtDown && hitId != null && !selectionEditedOnPress -> command { select(hitId, order, ctrl = true, shift = shiftAtDown) }
                                             // A plain click retargets the selection. When the press already
                                             // adopted the layer (direct drag from an empty selection) or
                                             // applied ctrl/shift, the selection is settled and must not be
@@ -613,15 +626,15 @@ fun WatchPreview(
                                 finalUpdates = if (handle != null && gestureFrame != null) {
                                     val handleStart = gestureFrame.handle(handle, rotateOffsetInDesign(gestureFrame, viewport, initialWork, 26.0 * density))
                                     val delta = if (handle == TransformHandle.ROTATE) {
-                                        val snap = currentSnapping && !event.keyboardModifiers.isAltPressed
+                                        val snap = canvasSnappingEnabled(currentSnapping, ctrlFineMove, event.keyboardModifiers.isAltPressed)
                                         HandleTransformDelta(rotationDegrees = rotationHandleDelta(gestureFrame, handleStart, current, snap,
-                                            event.keyboardModifiers.isShiftPressed && !event.keyboardModifiers.isAltPressed))
+                                            event.keyboardModifiers.isShiftPressed && !event.keyboardModifiers.isAltPressed && !ctrlFineMove))
                                     } else transformHandleDelta(gestureFrame, handle, handleStart, current)
                                     transformUpdates(originals, gestureFrame, delta, render.frame, document.workDir.toFile())
                                 } else {
-                                    var delta = Point(current.x - start.x, current.y - start.y)
+                                    var delta = canvasMoveDelta(Point(current.x - start.x, current.y - start.y), ctrlFineMove)
                                     if (event.keyboardModifiers.isShiftPressed) delta = if (abs(delta.x) > abs(delta.y)) Point(delta.x, 0.0) else Point(0.0, delta.y)
-                                    if (currentSnapping && !event.keyboardModifiers.isAltPressed && selectedPoints.isNotEmpty()) {
+                                    if (canvasSnappingEnabled(currentSnapping, ctrlFineMove, event.keyboardModifiers.isAltPressed) && selectedPoints.isNotEmpty()) {
                                         val tx = 6 * density / (initialWork.scale * viewport.scaleX)
                                         val ty = 6 * density / (initialWork.scale * viewport.scaleY)
                                         val left = selectedPoints.minOf { it.x }; val right = selectedPoints.maxOf { it.x }
