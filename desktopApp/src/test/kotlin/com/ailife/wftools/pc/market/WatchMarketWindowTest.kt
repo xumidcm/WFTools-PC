@@ -20,6 +20,8 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /** UI contracts for the market window and its post-download dialog. */
 class WatchMarketWindowTest {
@@ -131,6 +133,49 @@ class WatchMarketWindowTest {
         compose.waitUntil(5000) { compose.onAllNodesWithTag("market-detail").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("market-detail-protected").assertExists()
         compose.onNodeWithText("受保护表盘", substring = true).assertExists()
+    }
+
+    @Test fun `detail dialog shows a loading spinner before replacing it with remote detail`() {
+        val releaseDetail = CountDownLatch(1)
+        val detailBody = listBody.substringAfter("[{").substringBefore("}],\"pagination")
+            .let { "{$it,\"description\":\"远程详情\"}" }
+        val transport = MarketTransport { url, _ ->
+            when {
+                url.contains("/watchfaces?") -> listBody.toByteArray(StandardCharsets.UTF_8)
+                url.endsWith("/watchfaces/a1") -> {
+                    releaseDetail.await(5, TimeUnit.SECONDS)
+                    detailBody.toByteArray(StandardCharsets.UTF_8)
+                }
+                url.endsWith("/categories") -> "{\"data\":[]}".toByteArray(StandardCharsets.UTF_8)
+                else -> ByteArray(0)
+            }
+        }
+        try {
+            compose.setContent { WFToolsTheme(false) { Surface(Modifier.fillMaxSize()) {
+                WatchMarketWindow(WatchMarketApi(transport), temp.newFolder().toPath(), {}, {})
+            } } }
+            compose.waitUntil(5000) { compose.onAllNodesWithTag("market-card-a1").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("market-card-a1").performClick()
+            compose.waitUntil(5000) { compose.onAllNodesWithTag("market-detail-loading").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithText("远程详情").assertDoesNotExist()
+            releaseDetail.countDown()
+            compose.waitUntil(5000) { compose.onAllNodesWithText("远程详情").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("market-detail-loading").assertDoesNotExist()
+        } finally {
+            releaseDetail.countDown()
+        }
+    }
+
+    @Test fun `protected detail keeps the badge but removes the explanatory note`() {
+        val protectedBody = listBody.replace("\"created_at\"", "\"wm_protected\":true,\"created_at\"")
+        compose.setContent { WFToolsTheme(false) { Surface(Modifier.fillMaxSize()) {
+            WatchMarketWindow(api(protectedBody), temp.newFolder().toPath(), {}, {})
+        } } }
+        compose.waitUntil(5000) { compose.onAllNodesWithTag("market-card-a1").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("market-card-a1").performClick()
+        compose.waitUntil(5000) { compose.onAllNodesWithTag("market-detail").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("market-detail-protected").assertExists()
+        compose.onNodeWithTag("market-detail-protected-note").assertDoesNotExist()
     }
 
     @Test fun `detail dialog offers the selected face page in the browser`() {

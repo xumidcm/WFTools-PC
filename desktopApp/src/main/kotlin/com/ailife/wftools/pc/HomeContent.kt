@@ -479,7 +479,6 @@ internal fun performFileAssociationAction(
                 app.protectedFaces.allowEditing,
                 "home-edit-protected-toggle",
             ) { app.updateProtectedFaces(app.protectedFaces.copy(allowEditing=it)) }
-            Text("受保护表盘（含 watch.pxml）将直接解密后打开编辑，不再提示。另存为时会写成普通可编辑表盘；未修改就保存则原文件保持原样。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
         HorizontalDivider()
         Text("画布操作",style=MaterialTheme.typography.titleSmall)

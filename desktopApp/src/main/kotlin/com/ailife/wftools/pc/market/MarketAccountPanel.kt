@@ -1,6 +1,7 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package com.ailife.wftools.pc.market
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -15,6 +16,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -34,6 +39,7 @@ import kotlinx.coroutines.withContext
 import java.awt.Component
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.LinkedHashMap
 
 private enum class MarketAccountSection(val label: String, val icon: ImageVector) {
     OVERVIEW("概览", Icons.Default.Dashboard),
@@ -43,10 +49,30 @@ private enum class MarketAccountSection(val label: String, val icon: ImageVector
     PROFILE("个人资料", Icons.Default.Person),
 }
 
+private const val AVATAR_CACHE_MAX_ENTRIES = 16
+private val avatarCache = object : LinkedHashMap<String, ImageBitmap>(AVATAR_CACHE_MAX_ENTRIES + 1, .75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap>?): Boolean = size > AVATAR_CACHE_MAX_ENTRIES
+}
+
+private fun cachedAvatar(url: String): ImageBitmap? = synchronized(avatarCache) { avatarCache[url] }
+
+private fun cacheAvatar(url: String, bitmap: ImageBitmap) {
+    synchronized(avatarCache) { avatarCache[url] = bitmap }
+}
+
+private fun invalidateAvatar(url: String?) {
+    if (!url.isNullOrBlank()) synchronized(avatarCache) { avatarCache.remove(url) }
+}
+
+private fun decodeAvatar(bytes: ByteArray): ImageBitmap? = runCatching {
+    org.jetbrains.skia.Image.makeFromEncoded(bytes).use { it.toComposeImageBitmap() }
+}.getOrNull()
+
 /** Full native account and creator dashboard hosted inside the market window. */
 @Composable
 internal fun MarketAccountDialog(
     api: MarketAccountApi,
+    credentialStore: MarketCredentialStore = PersistentMarketCredentialStore(),
     session: MarketSession?,
     recentProjects: List<RecentProject>,
     owner: Component?,
@@ -65,7 +91,7 @@ internal fun MarketAccountDialog(
             shadowElevation = 12.dp,
         ) {
             if (session == null) {
-                MarketAuthContent(api, onSessionChange, onDismiss)
+                MarketAuthContent(api, credentialStore, onSessionChange, onDismiss)
             } else {
                 MarketCreatorDashboard(
                     api = api,
@@ -84,12 +110,15 @@ internal fun MarketAccountDialog(
 }
 
 @Composable
-private fun MarketAuthContent(api: MarketAccountApi, onSessionChange: (MarketSession?) -> Unit, onDismiss: () -> Unit) {
+private fun MarketAuthContent(api: MarketAccountApi, credentialStore: MarketCredentialStore, onSessionChange: (MarketSession?) -> Unit, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val remembered = remember { runCatching { credentialStore.load() }.getOrDefault(MarketRememberedCredentials()) }
     var register by remember { mutableStateOf(false) }
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf(remembered.username) }
+    var password by remember { mutableStateOf(remembered.password) }
     var confirmation by remember { mutableStateOf("") }
+    var rememberUsername by remember { mutableStateOf(remembered.rememberUsername) }
+    var rememberPassword by remember { mutableStateOf(remembered.rememberPassword) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var registrationEnabled by remember { mutableStateOf(true) }
@@ -121,6 +150,16 @@ private fun MarketAuthContent(api: MarketAccountApi, onSessionChange: (MarketSes
                     OutlinedTextField(username, { username = it; error = null }, Modifier.fillMaxWidth().testTag("market-auth-username"), label = { Text("用户名") }, singleLine = true, leadingIcon = { Icon(Icons.Default.Person, null) })
                     OutlinedTextField(password, { password = it; error = null }, Modifier.fillMaxWidth().testTag("market-auth-password"), label = { Text("密码") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), leadingIcon = { Icon(Icons.Default.Lock, null) })
                     if (register) OutlinedTextField(confirmation, { confirmation = it; error = null }, Modifier.fillMaxWidth().testTag("market-auth-confirm"), label = { Text("确认密码") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), leadingIcon = { Icon(Icons.Default.LockReset, null) })
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("market-remember-username")) {
+                            Checkbox(checked = rememberUsername, onCheckedChange = { rememberUsername = it })
+                            Text("记住账号")
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("market-remember-password")) {
+                            Checkbox(checked = rememberPassword, onCheckedChange = { checked -> rememberPassword = checked; if (checked) rememberUsername = true })
+                            Text("记住密码")
+                        }
+                    }
                     error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                     Button(
                         onClick = {
@@ -134,7 +173,10 @@ private fun MarketAuthContent(api: MarketAccountApi, onSessionChange: (MarketSes
                             busy = true; error = null
                             scope.launch {
                                 withContext(Dispatchers.IO) { runCatching { if (register) api.register(username, password, confirmation) else api.login(username, password) } }
-                                    .onSuccess(onSessionChange).onFailure { error = it.message ?: "账号请求失败" }
+                                    .onSuccess { next ->
+                                        runCatching { credentialStore.save(username, password, rememberUsername, rememberPassword) }
+                                        onSessionChange(next)
+                                    }.onFailure { error = it.message ?: "账号请求失败" }
                                 busy = false
                             }
                         },
@@ -145,7 +187,7 @@ private fun MarketAuthContent(api: MarketAccountApi, onSessionChange: (MarketSes
                         Icon(if (register) Icons.Default.PersonAdd else Icons.Default.Login, null, Modifier.size(18.dp)); Spacer(Modifier.width(7.dp))
                         Text(if (busy) "正在连接…" else if (register) "创建账号" else "登录")
                     }
-                    Text("账号密码只发送给 Watchmaker Community；WFTools-PC 不保存密码。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("仅在勾选后记住账号或密码；登录令牌只保存在当前运行会话。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -408,12 +450,34 @@ private fun MarketUploadFace(api: MarketAccountApi, session: MarketSession, rece
     }
     fun select(path: Path) { selected = path; parsed = null; success = null; error = null }
     val recentFiles = recentProjects.filter { it.draftId == null }.mapNotNull { recent -> runCatching { recent to Path.of(recent.path) }.getOrNull() }.filter { Files.isRegularFile(it.second) && it.second.fileName.toString().endsWith(".watch", true) }
+    fun analyze(path: Path) {
+        val size = runCatching { Files.size(path) }.getOrElse { 0L }
+        if (size > config.maxUploadMb.toLong() * 1024L * 1024L) { error = "文件超过 ${config.maxUploadMb} MB 上传上限。"; return }
+        busy = true; error = null
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { api.parseWatchface(session.token, path) } }.onSuccess { result ->
+                parsed = result; name = result.parsed.title.ifBlank { path.fileName.toString().removeSuffix(".watch") }
+                description = result.parsed.description.ifBlank { "由 WFTools-PC 上传" }; tags = result.parsed.tags.joinToString(", ")
+                screenType = normalizeScreenType(result.parsed.screenType); if (categoryId.isBlank()) categoryId = categories.firstOrNull()?.id.orEmpty()
+            }.onFailure { error = it.message }
+            busy = false
+        }
+    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("上传表盘", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         Text("先由服务器扫描并读取信息，确认资料后再正式上传。单个文件上限 ${config.maxUploadMb} MB。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Button(onClick = { chooseWatchFiles(owner).firstOrNull()?.let(::select) }, modifier = Modifier.testTag("market-upload-local")) { Icon(Icons.Default.FolderOpen, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("选择本地 .watch") }
-            selected?.let { Text(it.fileName.toString(), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            selected?.let { path ->
+                Text(path.fileName.toString(), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (parsed == null) {
+                    Button(onClick = { analyze(path) }, enabled = !busy, modifier = Modifier.testTag("market-upload-analyze")) {
+                        if (busy) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(6.dp)) }
+                        Icon(Icons.Default.Analytics, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp))
+                        Text(if (busy) "正在分析…" else "分析并读取表盘数据")
+                    }
+                }
+            }
         }
         if (recentFiles.isNotEmpty() && parsed == null) {
             Text("从最近编辑中选择", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -438,21 +502,7 @@ private fun MarketUploadFace(api: MarketAccountApi, session: MarketSession, rece
             }
         }
         selected?.let { path ->
-            if (parsed == null) {
-                Button(onClick = {
-                    val size = runCatching { Files.size(path) }.getOrElse { 0L }
-                    if (size > config.maxUploadMb.toLong() * 1024L * 1024L) { error = "文件超过 ${config.maxUploadMb} MB 上传上限。"; return@Button }
-                    busy = true; error = null
-                    scope.launch {
-                        withContext(Dispatchers.IO) { runCatching { api.parseWatchface(session.token, path) } }.onSuccess { result ->
-                            parsed = result; name = result.parsed.title.ifBlank { path.fileName.toString().removeSuffix(".watch") }
-                            description = result.parsed.description.ifBlank { "由 WFTools-PC 上传" }; tags = result.parsed.tags.joinToString(", ")
-                            screenType = normalizeScreenType(result.parsed.screenType); if (categoryId.isBlank()) categoryId = categories.firstOrNull()?.id.orEmpty()
-                        }.onFailure { error = it.message }
-                        busy = false
-                    }
-                }, enabled = !busy, modifier = Modifier.testTag("market-upload-analyze")) { if (busy) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(6.dp)) }; Text(if (busy) "正在分析…" else "分析并读取表盘信息") }
-            } else {
+            if (parsed != null) {
                 ScanSummary(requireNotNull(parsed))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(name, { name = it }, Modifier.weight(1f), label = { Text("名称") }, singleLine = true)
@@ -534,6 +584,9 @@ private fun MarketNotificationsPane(api: MarketAccountApi, session: MarketSessio
 private fun MarketProfilePane(api: MarketAccountApi, session: MarketSession, owner: Component?) {
     val scope = rememberCoroutineScope()
     var account by remember(session.token) { mutableStateOf<MarketAccount?>(null) }
+    var avatarBitmap by remember(session.token) { mutableStateOf<ImageBitmap?>(null) }
+    var avatarLoading by remember(session.token) { mutableStateOf(false) }
+    var avatarRevision by remember(session.token) { mutableIntStateOf(0) }
     var description by remember { mutableStateOf("") }
     var timezone by remember { mutableStateOf("UTC") }
     var language by remember { mutableStateOf("zh-CN") }
@@ -545,15 +598,35 @@ private fun MarketProfilePane(api: MarketAccountApi, session: MarketSession, own
     var error by remember { mutableStateOf<String?>(null) }
     fun load() { scope.launch { withContext(Dispatchers.IO) { runCatching { api.me(session.token) } }.onSuccess { account = it; description = it.description; timezone = it.timezone; language = it.language }.onFailure { error = it.message } } }
     LaunchedEffect(session.token) { load() }
+    LaunchedEffect(session.token, account?.avatarUrl, avatarRevision) {
+        val avatarUrl = account?.avatarUrl
+        if (avatarUrl.isNullOrBlank()) {
+            avatarBitmap = null
+            avatarLoading = false
+        } else {
+            avatarLoading = true
+            avatarBitmap = cachedAvatar(avatarUrl) ?: withContext(Dispatchers.IO) {
+                runCatching { api.avatarBytes(session.token, avatarUrl) }.getOrNull()?.let(::decodeAvatar)
+            }?.also { cacheAvatar(avatarUrl, it) }
+            avatarLoading = false
+        }
+    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("个人资料", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         account?.let { me ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(58.dp)) { Box(contentAlignment = Alignment.Center) { Text(me.username.firstOrNull()?.uppercase() ?: "?", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) } }
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(58.dp)) {
+                    val avatar = avatarBitmap
+                    if (avatar != null) {
+                        Image(avatar, "${me.username} 的头像", Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
+                    } else {
+                        Box(contentAlignment = Alignment.Center) { Text(me.username.firstOrNull()?.uppercase() ?: "?", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
+                    }
+                }
                 Column(Modifier.weight(1f)) {
                     Text(me.username, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text("${me.role} · ${me.createdAt.take(10)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(if (me.avatarUrl.isNullOrBlank()) "未设置头像" else "头像已设置", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(when { me.avatarUrl.isNullOrBlank() -> "未设置头像"; avatarLoading -> "正在加载头像…"; avatarBitmap != null -> "头像已加载"; else -> "头像加载失败" }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 OutlinedButton(onClick = {
                     chooseImageFiles(owner).firstOrNull()?.let { image ->
@@ -564,7 +637,7 @@ private fun MarketProfilePane(api: MarketAccountApi, session: MarketSession, own
                             busy = true
                             scope.launch {
                                 withContext(Dispatchers.IO) { runCatching { api.uploadAvatar(session.token, image) } }
-                                    .onSuccess { message = "头像已更新"; load() }
+                                    .onSuccess { invalidateAvatar(me.avatarUrl); avatarRevision++; message = "头像已更新"; load() }
                                     .onFailure { error = it.message }
                                 busy = false
                             }

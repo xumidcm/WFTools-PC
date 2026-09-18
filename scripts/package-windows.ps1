@@ -11,7 +11,7 @@ its uniquely named staging directory and refuses to overwrite release artifacts.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$AppImage,
-    [ValidatePattern('^\d{1,3}\.\d{1,3}\.\d{1,5}$')][string]$Version = '0.1.5',
+    [ValidatePattern('^\d{1,3}\.\d{1,3}\.\d{1,5}$')][string]$Version = '0.1.6',
     [string]$OutputDirectory = '',
     [string]$VlcDirectory = 'D:\DevTools\WFTools-PC\vlc\vlc-3.0.23',
     [string]$VlcArchive = 'D:\DevTools\WFTools-PC\downloads\vlc-3.0.23-win64.zip',

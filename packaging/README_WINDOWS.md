@@ -33,7 +33,7 @@ MSI 按当前 Windows 用户安装到 `%LOCALAPPDATA%\Programs\WFTools-PC`，创
 先由维护者串行执行 Compose `createDistributable`，再运行：
 
 ```powershell
-./scripts/package-windows.ps1 -AppImage './desktopApp/build/compose/binaries/main/app/WFTools-PC' -Version '0.1.5'
+./scripts/package-windows.ps1 -AppImage './desktopApp/build/compose/binaries/main/app/WFTools-PC' -Version '0.1.6'
 ```
 
 `-ValidateOnly` 只检查已有镜像、工具、来源哈希及插件缓存，不复制、编译 MSI 或运行安装器。

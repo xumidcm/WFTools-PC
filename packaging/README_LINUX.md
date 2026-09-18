@@ -7,7 +7,7 @@
 使用 apt 安装可以同时补齐 VLC、LibVLC、FFmpeg、XDG 与 MIME 依赖：
 
 ```bash
-sudo apt install ./WFTools-PC-0.1.5-linux-x64.deb
+sudo apt install ./WFTools-PC-0.1.6-linux-x64.deb
 ```
 
 安装后可从应用菜单启动 WFTools-PC，或运行 `wftools-pc`。安装包会注册 `.watch` 的候选 MIME 应用，但不会强制抢占现有默认应用；可在 WFTools-PC 首页设置中关联或取消关联。
@@ -17,7 +17,7 @@ sudo apt install ./WFTools-PC-0.1.5-linux-x64.deb
 解压整个归档后运行：
 
 ```bash
-./WFTools-PC-0.1.5-linux-x64-portable/run-wftools.sh
+./WFTools-PC-0.1.6-linux-x64-portable/run-wftools.sh
 ```
 
 便携包自带 Java 运行时，但使用发行版提供的 VLC/LibVLC、FFmpeg 和 Noto CJK 中文字体。缺少依赖时，启动器会给出 Ubuntu/Debian 安装命令。不要只复制 `app/bin/WFTools-PC`，应用目录和运行时必须完整保留。

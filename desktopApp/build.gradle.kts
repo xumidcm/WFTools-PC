@@ -29,10 +29,10 @@ compose.desktop {
             if (System.getProperty("os.name").lowercase().contains("linux")) targetFormats(TargetFormat.Deb)
             else targetFormats(TargetFormat.Msi)
             packageName = "WFTools-PC"
-            packageVersion = "0.1.5"
+            packageVersion = "0.1.6"
             description = "WatchMaker desktop editor"
             vendor = "WFTools-PC"
-            modules("java.desktop", "java.xml", "java.logging", "java.net.http", "jdk.unsupported")
+            modules("java.desktop", "java.xml", "java.logging", "java.net.http", "java.prefs", "jdk.unsupported")
             windows {
                 iconFile.set(project.file("../packaging/WFTools-PC.ico"))
                 perUserInstall = true

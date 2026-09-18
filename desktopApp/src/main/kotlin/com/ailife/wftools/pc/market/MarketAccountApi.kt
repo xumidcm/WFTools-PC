@@ -13,13 +13,112 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.net.URI
 import java.net.URLEncoder
+import java.security.SecureRandom
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Base64
 import java.util.UUID
+import java.util.prefs.Preferences
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 data class MarketUser(val id: String, val username: String, val role: String)
 data class MarketSession(val token: String, val user: MarketUser)
+
+/** Values restored into the native login form when the user opts into remembering them. */
+data class MarketRememberedCredentials(
+    val username: String = "",
+    val password: String = "",
+    val rememberUsername: Boolean = false,
+    val rememberPassword: Boolean = false,
+)
+
+interface MarketCredentialStore {
+    fun load(): MarketRememberedCredentials
+    fun save(username: String, password: String, rememberUsername: Boolean, rememberPassword: Boolean)
+    fun clear()
+}
+
+/**
+ * Small per-user credential store for the login form. The bearer token deliberately remains
+ * session-only; an opted-in password is encrypted before it reaches the Preferences backend.
+ */
+class PersistentMarketCredentialStore(
+    private val preferences: Preferences = Preferences.userNodeForPackage(PersistentMarketCredentialStore::class.java),
+) : MarketCredentialStore {
+    override fun load(): MarketRememberedCredentials = synchronized(preferences) {
+        val rememberUsername = preferences.getBoolean(KEY_REMEMBER_USERNAME, false)
+        val rememberPassword = preferences.getBoolean(KEY_REMEMBER_PASSWORD, false)
+        val username = preferences.get(KEY_USERNAME, "").takeIf { rememberUsername }.orEmpty()
+        val password = if (rememberPassword) decrypt(preferences.get(KEY_PASSWORD, "")) else null
+        MarketRememberedCredentials(
+            username = username,
+            password = password.orEmpty(),
+            rememberUsername = rememberUsername && username.isNotBlank(),
+            rememberPassword = rememberPassword && !password.isNullOrEmpty(),
+        )
+    }
+
+    override fun save(username: String, password: String, rememberUsername: Boolean, rememberPassword: Boolean) {
+        synchronized(preferences) {
+            val cleanUsername = username.trim()
+            val keepUsername = rememberUsername || rememberPassword
+            val keepPassword = rememberPassword && password.isNotEmpty()
+            if (keepUsername) preferences.put(KEY_USERNAME, cleanUsername) else preferences.remove(KEY_USERNAME)
+            preferences.putBoolean(KEY_REMEMBER_USERNAME, keepUsername)
+            if (keepPassword) preferences.put(KEY_PASSWORD, encrypt(password)) else preferences.remove(KEY_PASSWORD)
+            preferences.putBoolean(KEY_REMEMBER_PASSWORD, keepPassword)
+            runCatching { preferences.flush() }
+        }
+    }
+
+    override fun clear() {
+        synchronized(preferences) {
+            listOf(KEY_USERNAME, KEY_PASSWORD, KEY_REMEMBER_USERNAME, KEY_REMEMBER_PASSWORD, KEY_KEY).forEach(preferences::remove)
+            runCatching { preferences.flush() }
+        }
+    }
+
+    private fun encrypt(value: String): String {
+        val iv = ByteArray(GCM_IV_BYTES).also(SecureRandom()::nextBytes)
+        val cipher = Cipher.getInstance(CIPHER)
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(keyBytes(), "AES"), GCMParameterSpec(GCM_TAG_BITS, iv))
+        val encrypted = cipher.doFinal(value.toByteArray(StandardCharsets.UTF_8))
+        return Base64.getEncoder().encodeToString(iv + encrypted)
+    }
+
+    private fun decrypt(encoded: String): String? = runCatching {
+        val payload = Base64.getDecoder().decode(encoded)
+        if (payload.size <= GCM_IV_BYTES) return null
+        val iv = payload.copyOfRange(0, GCM_IV_BYTES)
+        val cipher = Cipher.getInstance(CIPHER)
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes(), "AES"), GCMParameterSpec(GCM_TAG_BITS, iv))
+        String(cipher.doFinal(payload.copyOfRange(GCM_IV_BYTES, payload.size)), StandardCharsets.UTF_8)
+    }.getOrNull()
+
+    private fun keyBytes(): ByteArray {
+        val existing = preferences.getByteArray(KEY_KEY, null)
+        if (existing != null && existing.size == AES_KEY_BYTES) return existing
+        val generated = ByteArray(AES_KEY_BYTES).also(SecureRandom()::nextBytes)
+        preferences.putByteArray(KEY_KEY, generated)
+        runCatching { preferences.flush() }
+        return generated
+    }
+
+    private companion object {
+        const val KEY_USERNAME = "username"
+        const val KEY_PASSWORD = "passwordCiphertext"
+        const val KEY_REMEMBER_USERNAME = "rememberUsername"
+        const val KEY_REMEMBER_PASSWORD = "rememberPassword"
+        const val KEY_KEY = "encryptionKey"
+        const val CIPHER = "AES/GCM/NoPadding"
+        const val AES_KEY_BYTES = 32
+        const val GCM_IV_BYTES = 12
+        const val GCM_TAG_BITS = 128
+    }
+}
 
 data class MarketAccount(
     val id: String,
@@ -184,6 +283,15 @@ class MarketAccountApi(
 
     fun me(token: String): MarketAccount = parseAccount(json("GET", "/my/me", token = token).asObjectOrEmpty())
 
+    /** Downloads the public avatar bytes while keeping the URL on the market origin. */
+    fun avatarBytes(token: String, avatarUrl: String): ByteArray {
+        val request = MarketAccountRequest("GET", avatarRequestUrl(avatarUrl), authHeaders(token))
+        val response = execute(request)
+        if (response.status !in 200..299) throw MarketAccountException(errorText(response), response.status)
+        if (response.body.size > MAX_AVATAR_BYTES) throw MarketAccountException("头像响应超过大小限制")
+        return response.body
+    }
+
     fun updateProfile(token: String, description: String? = null, timezone: String? = null, language: String? = null): MarketAccount {
         val values = buildMap {
             description?.let { put("description", it) }
@@ -275,7 +383,14 @@ class MarketAccountApi(
         request(MarketAccountRequest(method, url(path), authHeaders(token) + if (body != null) mapOf("Content-Type" to "application/json; charset=utf-8") else emptyMap(), body = body))
 
     private fun request(request: MarketAccountRequest): JsonElement {
-        val response = try {
+        val response = execute(request)
+        if (response.status !in 200..299) throw MarketAccountException(errorText(response), response.status)
+        if (response.body.isEmpty()) return JsonNull.INSTANCE
+        return try { JsonParser.parseString(String(response.body, StandardCharsets.UTF_8)) }
+        catch (error: Exception) { throw MarketAccountException("市场返回了无效数据：${error.message ?: "无法解析"}", response.status) }
+    }
+
+    private fun execute(request: MarketAccountRequest): MarketAccountResponse = try {
             transport.execute(request)
         } catch (error: MarketAccountException) {
             // Preserve useful local validation and server-facing domain errors verbatim.
@@ -288,11 +403,6 @@ class MarketAccountApi(
         } catch (error: Exception) {
             throw MarketAccountException("市场请求失败：${error.message ?: error.javaClass.simpleName}")
         }
-        if (response.status !in 200..299) throw MarketAccountException(errorText(response), response.status)
-        if (response.body.isEmpty()) return JsonNull.INSTANCE
-        return try { JsonParser.parseString(String(response.body, StandardCharsets.UTF_8)) }
-        catch (error: Exception) { throw MarketAccountException("市场返回了无效数据：${error.message ?: "无法解析"}", response.status) }
-    }
 
     private fun authHeaders(token: String? = null): Map<String, String> = buildMap {
         put("Accept", "application/json")
@@ -300,6 +410,26 @@ class MarketAccountApi(
     }
 
     private fun url(path: String): String = baseUrl.trimEnd('/') + "/" + path.trimStart('/')
+
+    private fun avatarRequestUrl(rawPath: String): String {
+        val path = rawPath.trim()
+        if (path.isBlank()) throw MarketAccountException("头像地址为空")
+        val base = runCatching { URI.create(baseUrl) }.getOrElse { throw MarketAccountException("市场地址无效") }
+        val candidate = runCatching { URI.create(path) }.getOrElse { throw MarketAccountException("头像地址无效") }
+        if (candidate.isAbsolute) {
+            val sameOrigin = candidate.scheme.equals(base.scheme, true) && candidate.host.equals(base.host, true) &&
+                effectivePort(candidate) == effectivePort(base)
+            if (!sameOrigin) throw MarketAccountException("头像地址不是市场同源地址")
+            return candidate.toString()
+        }
+        if (path.startsWith("//")) throw MarketAccountException("头像地址无效")
+        return if (path.startsWith("/")) {
+            runCatching { URI(base.scheme, base.authority, path, null, null).toString() }
+                .getOrElse { throw MarketAccountException("头像地址无效") }
+        } else url(path)
+    }
+
+    private fun effectivePort(uri: URI): Int = if (uri.port >= 0) uri.port else if (uri.scheme.equals("https", true)) 443 else 80
 
     private fun errorText(response: MarketAccountResponse): String {
         val fallback = "市场请求失败（HTTP ${response.status}）"
@@ -394,6 +524,10 @@ class MarketAccountApi(
         "jpg", "jpeg" -> "image/jpeg"
         "webp" -> "image/webp"
         else -> "application/octet-stream"
+    }
+
+    private companion object {
+        const val MAX_AVATAR_BYTES = 4 * 1024 * 1024
     }
 }
 

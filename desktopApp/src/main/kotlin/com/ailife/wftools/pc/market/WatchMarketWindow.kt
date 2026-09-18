@@ -69,12 +69,14 @@ fun WatchMarketWindow(
     recentProjects: List<RecentProject> = emptyList(),
     owner: Component? = null,
     accountApi: MarketAccountApi? = null,
+    accountStore: MarketCredentialStore? = null,
     marketSession: MarketSession? = null,
     onSessionChange: (MarketSession?) -> Unit = {},
     onOpenRecent: (RecentProject) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val resolvedAccountApi = accountApi ?: remember { MarketAccountApi() }
+    val resolvedAccountStore = accountStore ?: remember { PersistentMarketCredentialStore() }
     var sort by remember { mutableStateOf(MarketSort.LATEST) }
     var screenType by remember { mutableStateOf(MarketScreenType.ANY) }
     var category by remember { mutableStateOf("") }
@@ -247,6 +249,7 @@ fun WatchMarketWindow(
     if (accountOpen) {
         MarketAccountDialog(
             api = resolvedAccountApi,
+            credentialStore = resolvedAccountStore,
             session = session,
             recentProjects = recentProjects,
             owner = owner,
@@ -423,81 +426,97 @@ private fun cachePreview(id: String, bitmap: ImageBitmap) {
     openExternal: (String) -> Unit,
     onError: (String) -> Unit,
 ) {
-    var detail by remember(item.id) { mutableStateOf(item) }
+    var detail by remember(item.id) { mutableStateOf<MarketItem?>(null) }
+    var loading by remember(item.id) { mutableStateOf(true) }
+    var detailFallback by remember(item.id) { mutableStateOf(false) }
     LaunchedEffect(item.id) {
-        withContext(Dispatchers.IO) { runCatching { api.detail(item.id) } }.onSuccess { it?.let { loaded ->
-            // Keep the list flag visible if an older detail endpoint omits wm_protected.
-            detail = loaded.copy(protected = loaded.protected || item.protected)
-        } }
+        loading = true
+        val loaded = withContext(Dispatchers.IO) { runCatching { api.detail(item.id) }.getOrNull() }
+        detailFallback = loaded == null
+        // Keep the list flag visible if an older detail endpoint omits wm_protected.
+        detail = (loaded ?: item).copy(protected = (loaded?.protected == true) || item.protected)
+        loading = false
     }
     AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag("market-detail"),
         title = {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
-                    Icon(Icons.Default.Watch, null, Modifier.padding(8.dp).size(22.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
-                }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(detail.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("表盘详情", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                if (detail.protected) {
-                    Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = RoundedCornerShape(50), modifier = Modifier.testTag("market-detail-protected")) {
-                        Row(Modifier.padding(horizontal = 9.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Icon(Icons.Default.Lock, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onTertiaryContainer)
-                            Text("受保护表盘", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onTertiaryContainer)
+            if (loading) {
+                Text("正在加载表盘详情…", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            } else {
+                val shown = requireNotNull(detail)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+                        Icon(Icons.Default.Watch, null, Modifier.padding(8.dp).size(22.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                    }
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(shown.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(if (detailFallback) "表盘详情 · 已使用列表信息" else "表盘详情", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (shown.protected) {
+                        Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = RoundedCornerShape(50), modifier = Modifier.testTag("market-detail-protected")) {
+                            Row(Modifier.padding(horizontal = 9.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Icon(Icons.Default.Lock, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onTertiaryContainer)
+                                Text("受保护表盘", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                            }
                         }
                     }
                 }
             }
         },
         text = {
-            Column(Modifier.widthIn(min = 420.dp, max = 640.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Surface(
-                    Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .46f),
-                    tonalElevation = 1.dp,
-                ) {
-                    Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
-                        MarketPreview(detail, api, Modifier.size(280.dp).clip(RoundedCornerShape(12.dp)))
+            if (loading) {
+                Box(Modifier.widthIn(min = 420.dp, max = 640.dp).heightIn(min = 360.dp), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        CircularProgressIndicator(Modifier.size(42.dp).testTag("market-detail-loading"), strokeWidth = 4.dp)
+                        Text("正在从表盘市场读取完整信息", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (detail.author.isNotBlank()) MarketDetailInfo(Icons.Default.Person, "作者", detail.author)
-                    if (detail.category.isNotBlank()) MarketDetailInfo(Icons.Default.Category, "分类", detail.category)
-                    if (detail.screenType.isNotBlank()) MarketDetailInfo(Icons.Default.Smartphone, "屏幕", detail.screenType)
-                    if (detail.version.isNotBlank()) MarketDetailInfo(Icons.Default.NewReleases, "版本", detail.version)
-                    if (detail.createdAt.isNotBlank()) MarketDetailInfo(Icons.Default.CalendarToday, "发布", detail.createdAt)
-                    MarketDetailInfo(Icons.Default.Download, "下载", detail.downloadCount.toString())
-                    MarketDetailInfo(Icons.Default.Favorite, "收藏", detail.favoriteCount.toString())
-                    MarketDetailInfo(Icons.Default.Visibility, "浏览", detail.views.toString())
-                    if (detail.tags.isNotEmpty()) MarketDetailInfo(Icons.Default.Label, "标签", detail.tags.joinToString(", "))
-                }
-                if (detail.protected) {
-                    Surface(Modifier.fillMaxWidth().testTag("market-detail-protected-note"), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = .72f)) {
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(Icons.Default.Lock, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onTertiaryContainer)
-                            Text("该表盘带有受保护内容，下载后仍按当前的解密权限处理。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onTertiaryContainer)
+            } else {
+                val shown = requireNotNull(detail)
+                Column(Modifier.widthIn(min = 420.dp, max = 640.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Surface(
+                        Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .46f),
+                        tonalElevation = 1.dp,
+                    ) {
+                        Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
+                            MarketPreview(shown, api, Modifier.size(280.dp).clip(RoundedCornerShape(12.dp)))
                         }
                     }
-                }
-                if (detail.description.isNotBlank()) {
-                    HorizontalDivider()
-                    Text(detail.description, style = MaterialTheme.typography.bodyMedium)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (shown.author.isNotBlank()) MarketDetailInfo(Icons.Default.Person, "作者", shown.author)
+                        if (shown.category.isNotBlank()) MarketDetailInfo(Icons.Default.Category, "分类", shown.category)
+                        if (shown.screenType.isNotBlank()) MarketDetailInfo(Icons.Default.Smartphone, "屏幕", shown.screenType)
+                        if (shown.version.isNotBlank()) MarketDetailInfo(Icons.Default.NewReleases, "版本", shown.version)
+                        if (shown.createdAt.isNotBlank()) MarketDetailInfo(Icons.Default.CalendarToday, "发布", shown.createdAt)
+                        MarketDetailInfo(Icons.Default.Download, "下载", shown.downloadCount.toString())
+                        MarketDetailInfo(Icons.Default.Favorite, "收藏", shown.favoriteCount.toString())
+                        MarketDetailInfo(Icons.Default.Visibility, "浏览", shown.views.toString())
+                        if (shown.tags.isNotEmpty()) MarketDetailInfo(Icons.Default.Label, "标签", shown.tags.joinToString(", "))
+                    }
+                    if (shown.description.isNotBlank()) {
+                        HorizontalDivider()
+                        Text(shown.description, style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
             }
         },
         confirmButton = {
-            Row(Modifier.fillMaxWidth().testTag("market-detail-actions"), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { runCatching { openExternal(WatchMarket.watchFaceUrl(detail.id)) }.onFailure { onError("无法打开浏览器：${it.message}") } }, modifier = Modifier.testTag("market-detail-open-web")) {
-                    Icon(Icons.Default.OpenInNew, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text("在浏览器打开")
-                }
+            if (loading) {
                 TextButton(onClick = onDismiss) { Text("关闭") }
-                Button(onClick = onDownload, enabled = !downloading) {
-                    if (downloading) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)) }
-                    Text(if (downloading) "下载中…" else "下载 .watch")
+            } else {
+                val shown = requireNotNull(detail)
+                Row(Modifier.fillMaxWidth().testTag("market-detail-actions"), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { runCatching { openExternal(WatchMarket.watchFaceUrl(shown.id)) }.onFailure { onError("无法打开浏览器：${it.message}") } }, modifier = Modifier.testTag("market-detail-open-web")) {
+                        Icon(Icons.Default.OpenInNew, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text("在浏览器打开")
+                    }
+                    TextButton(onClick = onDismiss) { Text("关闭") }
+                    Button(onClick = onDownload, enabled = !downloading) {
+                        if (downloading) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)) }
+                        Text(if (downloading) "下载中…" else "下载 .watch")
+                    }
                 }
             }
         },

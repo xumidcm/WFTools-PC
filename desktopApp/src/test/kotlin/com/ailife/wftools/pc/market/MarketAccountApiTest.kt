@@ -8,6 +8,8 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.net.InetSocketAddress
 import com.sun.net.httpserver.HttpServer
+import java.util.UUID
+import java.util.prefs.Preferences
 
 class MarketAccountApiTest {
     @get:Rule val temp = TemporaryFolder()
@@ -22,6 +24,14 @@ class MarketAccountApiTest {
 
     private class ThrowingTransport(private val failure: Exception) : MarketAccountTransport {
         override fun execute(request: MarketAccountRequest): MarketAccountResponse = throw failure
+    }
+
+    private class BytesTransport(private val bytes: ByteArray) : MarketAccountTransport {
+        val requests = mutableListOf<MarketAccountRequest>()
+        override fun execute(request: MarketAccountRequest): MarketAccountResponse {
+            requests += request
+            return MarketAccountResponse(200, bytes, "image/png")
+        }
     }
 
     @Test fun `login sends credentials and parses the returned bearer session`() {
@@ -112,6 +122,32 @@ class MarketAccountApiTest {
         assertTrue(request.url.endsWith("/my/profile"))
         assertEquals("Bearer jwt-token", request.headers["Authorization"])
         assertTrue(String(requireNotNull(request.body), StandardCharsets.UTF_8).contains("Asia/Shanghai"))
+    }
+
+    @Test fun `avatar endpoint returns raw same-origin bytes without json parsing`() {
+        val transport = BytesTransport(byteArrayOf(1, 2, 3, 4))
+        val api = MarketAccountApi("https://example.test/api", transport)
+        assertArrayEquals(byteArrayOf(1, 2, 3, 4), api.avatarBytes("jwt-token", "/api/creators/sensei/avatar"))
+        assertEquals("https://example.test/api/creators/sensei/avatar", transport.requests.single().url)
+        assertEquals("Bearer jwt-token", transport.requests.single().headers["Authorization"])
+    }
+
+    @Test fun `remembered account and password survive without storing plaintext`() {
+        val node = Preferences.userRoot().node("wftools-test-${UUID.randomUUID()}")
+        try {
+            val store = PersistentMarketCredentialStore(node)
+            store.save("sensei", "secret1", rememberUsername = true, rememberPassword = true)
+            val restored = store.load()
+            assertEquals(MarketRememberedCredentials("sensei", "secret1", true, true), restored)
+            val ciphertext = node.get("passwordCiphertext", "")
+            assertTrue(ciphertext.isNotBlank())
+            assertFalse(ciphertext.contains("secret1"))
+
+            store.save("sensei", "secret1", rememberUsername = true, rememberPassword = false)
+            assertEquals(MarketRememberedCredentials("sensei", "", true, false), store.load())
+        } finally {
+            node.removeNode()
+        }
     }
 
     @Test fun `real transport can send patch without falling back to an unsupported jdk method`() {
