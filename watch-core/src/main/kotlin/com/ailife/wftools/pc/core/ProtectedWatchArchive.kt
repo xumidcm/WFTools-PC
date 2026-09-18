@@ -6,6 +6,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.Locale
@@ -20,9 +21,100 @@ import java.util.zip.ZipOutputStream
  */
 internal object ProtectedWatchArchive {
     internal data class Expected(val xml: String, val hashes: Map<String, String>, val imageHashes: Map<String, String>)
+
+    /** 解密后的受保护归档：真实 XML 与还原成明文的图片。 */
+    internal data class Decrypted(val xml: String, val images: Map<String, ByteArray>)
+
+    private const val PXML_ENTRY = "watch.pxml"
+    private const val XML_ENTRY = "watch.xml"
     private val key = byteArrayOf(83, 87, 72, 110, 45)
     private fun encryptedName(path: String) = path.substringBeforeLast('.') + if (AssetKinds.extension(path) == "png") ".ppng" else ".pjpg"
     private fun isPlainImage(name: String) = name.startsWith("images/", true) && AssetKinds.extension(name) in setOf("png", "jpg", "jpeg")
+
+    /** 加密孪生图片（.ppng/.pjpg）。只有受保护导出才会产生，是受保护归档的特征条目。 */
+    internal fun isEncryptedTwin(name: String) = AssetKinds.extension(name) in setOf("ppng", "pjpg")
+
+    /** 只可能出现在受保护归档里的条目；转换出的可编辑文档不应把它们写回新归档。 */
+    internal fun isProtectedOnlyEntry(name: String) = name.equals(PXML_ENTRY, true) || isEncryptedTwin(name)
+
+    /** 加密孪生名还原成明文名，与 [encryptedName] 互逆（.jpeg 也走 .pjpg，收回成 .jpg）。 */
+    internal fun plainName(name: String): String = when (AssetKinds.extension(name)) {
+        "ppng" -> name.substringBeforeLast('.') + ".png"
+        "pjpg" -> name.substringBeforeLast('.') + ".jpg"
+        else -> name
+    }
+
+    /**
+     * 解密受保护归档。
+     *
+     * 返回真实 XML（图片引用已还原为 .png/.jpg）与逐字节还原的图片。无法解密时返回 null，
+     * 调用方必须回退到"此表盘受保护"的提示——绝不把解不开的内容当成可编辑文档交出去。
+     */
+    fun decrypt(archive: Path): Decrypted? = runCatching {
+        ZipFile(archive.toFile()).use { zip -> decryptEntries(zip) }
+    }.getOrNull()
+
+    /** 归档是否带受保护标记（存在 watch.pxml）。 */
+    fun hasProtection(archive: Path): Boolean = runCatching {
+        ZipFile(archive.toFile()).use { zip -> zip.entries().asSequence().any { it.name.equals(PXML_ENTRY, true) } }
+    }.getOrDefault(false)
+
+    /**
+     * 把 [base] 就地改写成等价的**明文**归档：真实 XML 作为 watch.xml，图片还原成明文，
+     * 加密专用条目（watch.pxml 与 .ppng/.pjpg）不再保留，其余条目逐字节复制。
+     *
+     * 这样工作副本的基准归档与普通表盘完全一致，解包与保存都无需再为受保护格式做特例。
+     */
+    fun replaceWithPlain(base: Path, decrypted: Decrypted) {
+        val temporary = Files.createTempFile(base.toAbsolutePath().normalize().parent, ".wftools-plain-", ".zip.tmp")
+        try {
+            ZipOutputStream(Files.newOutputStream(temporary)).use { output ->
+                ZipFile(base.toFile()).use { zip ->
+                    val entries = zip.entries().asSequence().toList()
+                    zip.comment?.let(output::setComment)
+                    val written = hashSetOf<String>()
+                    fun emit(name: String, bytes: ByteArray, original: ZipEntry? = null) {
+                        WatchDocumentStore.validateArchiveName(name)
+                        if (!written.add(name.trimEnd('/').lowercase(Locale.ROOT))) fail("解密后资源名称冲突：$name")
+                        val entry = ZipEntry(name).apply {
+                            if (original != null) { time = original.time; comment = original.comment; extra = original.extra }
+                        }
+                        output.putNextEntry(entry); output.write(bytes); output.closeEntry()
+                    }
+                    // 真实 XML 替换掉占位 watch.xml。
+                    emit(XML_ENTRY, decrypted.xml.toByteArray(Charsets.UTF_8),
+                        entries.firstOrNull { it.name.equals(XML_ENTRY, true) })
+                    decrypted.images.forEach { (name, bytes) -> emit(name, bytes) }
+                    entries.forEach { entry ->
+                        if (entry.isDirectory) return@forEach
+                        if (isProtectedOnlyEntry(entry.name) || entry.name.equals(XML_ENTRY, true)) return@forEach
+                        if (entry.name.lowercase(Locale.ROOT) in written) return@forEach
+                        emit(entry.name, zip.getInputStream(entry).use { it.readBytes() }, entry)
+                    }
+                }
+            }
+            Files.move(temporary, base, StandardCopyOption.REPLACE_EXISTING)
+        } finally { Files.deleteIfExists(temporary) }
+    }
+
+    private fun decryptEntries(zip: ZipFile): Decrypted? {
+        val entries = zip.entries().asSequence().toList()
+        val pxml = entries.firstOrNull { it.name.equals(PXML_ENTRY, true) } ?: return null
+        val raw = zip.getInputStream(pxml).use { it.readBytes().toString(Charsets.UTF_8) }
+        // 导出时图片引用被改写成加密孪生名，这里还原回明文名，与解出的图片文件名保持一致。
+        val xml = decodeXml(raw).replace(".ppng", ".png", true).replace(".pjpg", ".jpg", true)
+        // 密钥不对会得到非 Base64 或非 XML 的内容；这里顺带验证文档结构，避免放行垃圾数据。
+        WatchXml.validate(WatchXml.parse(xml))
+        val images = LinkedHashMap<String, ByteArray>()
+        entries.filter { !it.isDirectory && isEncryptedTwin(it.name) }.forEach { entry ->
+            images[plainName(entry.name)] = zip.getInputStream(entry).use { xorDecrypt(it.readBytes()) }
+        }
+        return Decrypted(xml, images)
+    }
+
+    private fun xorDecrypt(input: ByteArray): ByteArray =
+        ByteArray(input.size) { index -> (input[index].toInt() xor key[index % key.size].toInt()).toByte() }
+
     private fun encodeXml(xml: String): String = Base64.getEncoder().encodeToString(xml.toByteArray(Charsets.UTF_8))
         .replace("L", "#").replace("4", "L").replace("#", "4")
         .replace("D", "#").replace("g", "D").replace("#", "g")

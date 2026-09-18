@@ -34,6 +34,22 @@ class EditorPreferencesTest {
         Files.writeString(dir.resolve("application.properties"),"width=1\nheight=oops\nleft=-500\nright=Infinity\ntheme=invalid\n")
         assertEquals(WindowPreferences(), preferences.window()); assertEquals(PanelPreferences(), preferences.panels()); assertEquals(ThemePreference.SYSTEM, preferences.theme())
     }
+    @Test fun `search settings persist alongside the other agent choices`() {
+        val dir = temp.newFolder().toPath(); val preferences = EditorPreferences(dir)
+        preferences.saveAgentSettings(preferences.agentSettings().copy(searchEndpoint = "https://api.tavily.com", searchMaxResults = 8, searchDepth = SearchDepth.ADVANCED.wire))
+        val restored = EditorPreferences(dir).agentSettings()
+        assertEquals("https://api.tavily.com", restored.searchEndpoint)
+        assertEquals(8, restored.searchMaxResults)
+        assertEquals("advanced", restored.searchDepth)
+    }
+    @Test fun `an out of range search count written by another tool is repaired on read`() {
+        val dir = temp.newFolder().toPath()
+        // Bypass saveAgentSettings so the read-side repair branch is actually exercised.
+        Files.writeString(dir.resolve("application.properties"), "agent.searchMaxResults=99\nagent.searchDepth=deep\n")
+        val restored = EditorPreferences(dir).agentSettings()
+        assertEquals(SearchResultCount.MAX, restored.searchMaxResults)
+        assertEquals(SearchDepth.BASIC.wire, restored.searchDepth)
+    }
     @Test fun `theme divider and window choices survive independent preview writes`() {
         val preferences = EditorPreferences(temp.newFolder().toPath())
         val panels = PanelPreferences(220f,330f,180f); val window = WindowPreferences(1100,600)

@@ -17,6 +17,8 @@ media3 = "1.2.0"
 jump3r = "1.0.5"
 luaj = "1.0.3"
 osmdroid = "6.1.20"
+# Kept in step with the JNA that vlcj 4.12.1 brings in, so only one version resolves.
+jna = "5.16.0"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -43,6 +45,8 @@ androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.re
 jump3r = { group = "de.sciss", name = "jump3r", version.ref = "jump3r" }
 taoguan-luaj = { group = "io.github.taoguan", name = "luaj", version.ref = "luaj" }
 osmdroid-android = { group = "org.osmdroid", name = "osmdroid-android", version.ref = "osmdroid" }
+jna = { group = "net.java.dev.jna", name = "jna-jpms", version.ref = "jna" }
+jna-platform = { group = "net.java.dev.jna", name = "jna-platform-jpms", version.ref = "jna" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

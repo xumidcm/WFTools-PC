@@ -20,7 +20,13 @@ class DocumentSession internal constructor(
     internal var sourceHash: String?,
     internal var state: DocumentSnapshot,
     val workDir: Path = home.resolve("content"),
-    internal val baseArchiveHash: String? = sourceHash
+    internal val baseArchiveHash: String? = sourceHash,
+    /**
+     * 此会话由受保护归档解密而来。保存时会丢弃 watch.pxml 与 .ppng/.pjpg：解密后的文档是
+     * 普通可编辑表盘，不应把加密专用条目原样写回。未编辑就保存则按原文件逐字节复制，
+     * 受保护原件因此保持不动。
+     */
+    internal val protectedSource: Boolean = false
 ) : AutoCloseable {
     internal var savedSignature: String? = null
     internal var savedDerivedResources: Map<String, String> = emptyMap()

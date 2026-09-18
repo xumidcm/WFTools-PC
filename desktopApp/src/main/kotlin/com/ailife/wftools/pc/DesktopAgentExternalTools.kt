@@ -12,6 +12,7 @@ import com.ailife.wftools.agent.tools.WatchAgentImageResult
 import com.ailife.wftools.agent.tools.WatchAgentToolException
 import com.ailife.wftools.agent.workspace.WorkspaceManager
 import com.ailife.wftools.agent.workspace.WorkspacePathPolicy
+import com.ailife.wftools.pc.SearchDepth
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URLEncoder
@@ -91,7 +92,9 @@ class DesktopAgentExternalTools(
         // Tavily-compatible APIs use POST /search when the setting contains the API root.
         val apiSearch = endpoint.trimEnd('/').let { if (it.endsWith("/search")) it else "$it/search" }
         val request = AgentJsonWriter.objectValue(mapOf(
-            "query" to query, "search_depth" to "basic", "max_results" to 5,
+            "query" to query,
+            "search_depth" to searchDepthSetting(),
+            "max_results" to searchResultCount(),
             "include_answer" to false, "include_images" to false,
         ))
         return runCatching { execute(apiSearch, "POST", request, searchApiKey, 256 * 1024, "application/json") }
@@ -123,6 +126,12 @@ class DesktopAgentExternalTools(
         val raw = execute(url, "GET", null, null, 1024 * 1024, "text/html, text/plain, application/json")
         return readablePage(url, raw).take(768 * 1024)
     }
+
+    /** Tavily `max_results`; the API accepts 1..20. */
+    private fun searchResultCount(): Int = SearchResultCount.clamp(settings.searchMaxResults)
+
+    /** Tavily `search_depth`; unknown values fall back to `basic`. */
+    private fun searchDepthSetting(): String = SearchDepth.parse(settings.searchDepth).wire
 
     private fun imageEndpoint(operation: String): String {
         val configured = settings.imageGenerationEndpoint?.trim()?.trimEnd('/')

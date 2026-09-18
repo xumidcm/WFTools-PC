@@ -1,6 +1,8 @@
 package com.ailife.wftools.pc.preview
 
 import com.ailife.wftools.pc.core.LayerSelection
+import com.ailife.wftools.pc.input.TouchTargets
+import com.ailife.wftools.pc.input.isLongPress
 import java.math.BigDecimal
 import java.awt.Cursor
 import kotlin.math.abs
@@ -8,15 +10,22 @@ import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.round
 
-/** Resolves the stable layer IDs owned by one pointer gesture. */
+/**
+ * Resolves the stable layer IDs owned by one pointer gesture.
+ *
+ * The canvas and the layer list share one selection, so an existing selection owns the
+ * gesture: pressing on top of another layer must not steal the drag away from what the
+ * user picked in the sidebar. Without a selection, direct drag adopts the layer under
+ * the pointer while select-then-drag only selects it.
+ */
 fun canvasDragTargets(mode: CanvasOperationMode, hitId: String?, selection: Set<String>): Set<String> = when (mode) {
-    CanvasOperationMode.DIRECT_DRAG -> when {
-        hitId == null -> emptySet()
-        hitId in selection -> selection
-        else -> setOf(hitId)
-    }
+    CanvasOperationMode.DIRECT_DRAG -> if (selection.isNotEmpty()) selection else setOfNotNull(hitId)
     CanvasOperationMode.SELECT_THEN_DRAG -> selection
 }
+
+/** True when a press adopts the layer under the pointer instead of merely selecting it. */
+fun canvasPressAdoptsHit(mode: CanvasOperationMode, selection: Set<String>): Boolean =
+    mode == CanvasOperationMode.DIRECT_DRAG && selection.isEmpty()
 
 /** Keeps an existing group intact while the pointer may still become a drag. */
 fun canvasPressSelection(current: LayerSelection, id: String, order: List<String>, ctrl: Boolean, shift: Boolean): LayerSelection {
@@ -66,6 +75,92 @@ fun canvasDragPans(
 
 fun isCanvasPanGesture(tertiaryPressed: Boolean, spaceDown: Boolean, ctrlPrimary: Boolean): Boolean =
     (tertiaryPressed || spaceDown) && !ctrlPrimary
+
+/** 触摸长按的判定结果。 */
+enum class TouchGestureIntent {
+    /** 还没到判定点：可能仍是短按、双击的第一击，或者即将变成拖动。 */
+    NONE,
+
+    /** 长按成立且没有移动：触屏没有右键，这是上下文菜单的唯一入口。 */
+    CONTEXT_MENU,
+
+    /** 位移超过容差：这一手势是拖动（触屏上长按之后的拖动用来平移画布）。 */
+    MOVE,
+
+    /** 时间窗内落在同一目标的第二次点按：进入文字编辑。 */
+    TEXT_EDIT,
+}
+
+/** 双击进入文字编辑的时间窗（毫秒），与既有手感保持一致。 */
+const val DOUBLE_TAP_WINDOW_MILLIS = 450L
+
+private const val TRANSFORM_HANDLE_HIT_DP = 12f
+
+/**
+ * 触摸长按成立前允许的位移（dp）。手指落在玻璃上必然有抖动，容差太小会让长按永远不成立；
+ * 超过它说明用户在拖动。鼠标没有长按语义，返回 0 表示不会成立。
+ */
+fun touchHoldSlopDp(touch: Boolean): Float = if (touch) TouchTargets.MIN_TOUCH_DP / 4f else 0f
+
+/**
+ * 变换控制点的命中半径（dp）。触屏要按 44dp 的可点按目标放宽半径，鼠标保持原有的宽松值，
+ * 这样两者都不会因为命中区太小而抓不住控制点。
+ */
+fun transformHandleHitRadiusDp(touch: Boolean): Float =
+    if (touch) TouchTargets.MIN_TOUCH_DP / 2f else TRANSFORM_HANDLE_HIT_DP
+
+/** 双击两次落点之间允许的位移（dp）：手指落点远不如鼠标精准。 */
+fun doubleTapSlopDp(touch: Boolean): Float = if (touch) TouchTargets.MIN_TOUCH_DP / 2f else TRANSFORM_HANDLE_HIT_DP
+
+/**
+ * 长按呼出菜单时允许的落点偏差（dp）。触屏上手指比鼠标粗，只有一两像素高的细图层
+ * 也应该能被长按选中，否则用户点得到却选不中。
+ */
+fun contextMenuHitSlopDp(touch: Boolean): Float = if (touch) TouchTargets.MIN_TOUCH_DP / 4f else 0f
+
+/**
+ * 判断触摸保持的结果。
+ *
+ * 长按优先于双击：[CONTEXT_MENU] 只在按住达到 [TouchTargets.LONG_PRESS_MILLIS] 且位移没有
+ * 超过 [movementSlopPx] 时成立，因此它与 [isLongPress] 完全一致。一旦位移超过容差就变成
+ * [MOVE]，长按与双击都不再成立——手指在屏幕上滑动是平移画布，而不是长按或双击。
+ */
+fun touchHoldIntent(
+    elapsedMillis: Long,
+    movementPx: Float,
+    movementSlopPx: Float,
+    doubleTapCandidate: Boolean = false,
+): TouchGestureIntent = when {
+    movementPx > movementSlopPx -> TouchGestureIntent.MOVE
+    isLongPress(elapsedMillis, movementPx, movementSlopPx) -> TouchGestureIntent.CONTEXT_MENU
+    doubleTapCandidate -> TouchGestureIntent.TEXT_EDIT
+    else -> TouchGestureIntent.NONE
+}
+
+/**
+ * 双击判定：同一次编辑目标、落在 [DOUBLE_TAP_WINDOW_MILLIS] 时间窗内、两次落点足够近。
+ *
+ * 长按走不到这里（它在手势循环里已经被判成菜单或平移，并且不会记录点按时间戳），
+ * 所以长按与双击不会互相吞掉。
+ */
+fun isTextEditDoubleTap(
+    sameTarget: Boolean,
+    elapsedMillis: Long,
+    movementPx: Float,
+    movementSlopPx: Float,
+): Boolean = sameTarget && elapsedMillis in 1..DOUBLE_TAP_WINDOW_MILLIS && movementPx <= movementSlopPx
+
+/**
+ * 长按呼出菜单时的命中探针（屏幕像素偏移）：先在落点取样，再在容差内取邻近取样点，
+ * 让细图层也能被手指长按选中。顺序固定，便于测试与结果复现。
+ */
+fun contextMenuHitProbes(slopPx: Float): List<Point> = listOf(
+    Point(0.0, 0.0),
+    Point(-slopPx.toDouble(), 0.0),
+    Point(slopPx.toDouble(), 0.0),
+    Point(0.0, -slopPx.toDouble()),
+    Point(0.0, slopPx.toDouble()),
+)
 
 fun transformHandleCursor(handle: TransformHandle): Int = when (handle) {
     TransformHandle.TOP_LEFT -> Cursor.NW_RESIZE_CURSOR

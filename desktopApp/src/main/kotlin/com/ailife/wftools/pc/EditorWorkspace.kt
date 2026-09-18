@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -36,6 +37,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.*
+import com.ailife.wftools.pc.input.splitterThicknessDp
 import com.ailife.wftools.pc.platform.chooseAssets
 import com.ailife.wftools.pc.preview.*
 import java.awt.Cursor
@@ -188,22 +190,38 @@ val layerTypes = listOf("image" to "图片", "image_gif" to "GIF 动画", "video
 @Composable internal fun Splitter(horizontal: Boolean, tag:String, onDelta: (Float) -> Unit) {
     val density = LocalDensity.current.density
     val current by rememberUpdatedState(onDelta)
-    Box((if(horizontal) Modifier.fillMaxWidth().height(12.dp) else Modifier.fillMaxHeight().width(12.dp))
+    var coordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    // 触屏上 12dp 的分隔条手指抓不住。Java AWT 没有可靠的“本机有无触摸屏”查询，
+    // 因此按事件判断：一旦有触摸指针按在分隔条上，本窗口就切到触屏宽度。
+    var touchWidth by remember { mutableStateOf(false) }
+    val thickness = splitterThicknessDp(touchWidth).dp
+    Box((if(horizontal) Modifier.fillMaxWidth().height(thickness) else Modifier.fillMaxHeight().width(thickness))
         .testTag(tag)
+        .onGloballyPositioned { coordinates = it }
         .pointerHoverIcon(PointerIcon(Cursor(if(horizontal) Cursor.N_RESIZE_CURSOR else Cursor.E_RESIZE_CURSOR)))
         .pointerInput(horizontal) {
-            // Use Compose's drag stream instead of sampling AWT screen
-            // coordinates.  Screen events are occasionally absent on desktop
-            // (and become stale while the Row is remeasured), which made the
-            // splitter stop following the pointer.  dragAmount is local px and
-            // remains correct when the surrounding layout changes mid-drag.
-            detectDragGestures(
-                onDrag = { change, dragAmount ->
-                    val delta = if (horizontal) dragAmount.y else dragAmount.x
-                    if (delta != 0f) current(delta / density)
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                if (down.type == PointerType.Touch) touchWidth = true
+                // The splitter itself moves while the panel resizes, so a delta measured in
+                // the splitter's own coordinates cancels out against that movement and the
+                // handle crawls behind the pointer. Window coordinates do not move with the
+                // layout, so accumulating there tracks the pointer one to one.
+                // awaitEachGesture also avoids the drag slop dead zone detectDragGestures adds.
+                val start = coordinates?.localToWindow(down.position) ?: return@awaitEachGesture
+                var last = start
+                down.consume()
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) break
+                    val now = coordinates?.localToWindow(change.position) ?: break
+                    val delta = splitterDragDelta(horizontal, last, now, density)
+                    if (delta != 0f) current(delta)
+                    last = now
                     change.consume()
-                },
-            )
+                }
+            }
         },contentAlignment=Alignment.Center) {
         Box(if(horizontal)Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant)
             else Modifier.fillMaxHeight().width(1.dp).background(MaterialTheme.colorScheme.outlineVariant))

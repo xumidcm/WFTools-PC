@@ -25,6 +25,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
+import com.ailife.wftools.pc.input.touchTargetDp
 
 internal fun shouldCommitFieldEnter(multiline:Boolean, shiftPressed:Boolean):Boolean = !multiline || !shiftPressed
 
@@ -40,6 +41,8 @@ internal fun shouldCommitFieldEnter(multiline:Boolean, shiftPressed:Boolean):Boo
     var text by remember { mutableStateOf(value) }
     var currentHeight by remember(fieldHeight) { mutableStateOf(fieldHeight) }
     var focused by remember { mutableStateOf(false) }
+    // 触屏上把右下角拉杆放大到可点按的下限；鼠标保持既有的 32dp。
+    var resizedByTouch by remember { mutableStateOf(false) }
     LaunchedEffect(value) { if (!focused) text = value }
     val colors = MaterialTheme.colorScheme
     val density = LocalDensity.current
@@ -68,13 +71,15 @@ internal fun shouldCommitFieldEnter(multiline:Boolean, shiftPressed:Boolean):Boo
         enabled = enabled, textStyle = MaterialTheme.typography.bodyMedium.copy(color = if(enabled) colors.onSurface else colors.onSurfaceVariant),
         cursorBrush = SolidColor(colors.primary), singleLine = !multiline,
         decorationBox = { inner -> Box { if (text.isEmpty()) Text(placeholder, color = colors.onSurfaceVariant, maxLines = 1, style = MaterialTheme.typography.bodyMedium); inner() } })
-    if(multiline && enabled) Box(Modifier.align(Alignment.BottomEnd).size(32.dp).testTag("field-resize-handle")
+    if(multiline && enabled) Box(Modifier.align(Alignment.BottomEnd).size(touchTargetDp(32f, resizedByTouch).dp).testTag("field-resize-handle")
         .pointerHoverIcon(PointerIcon(java.awt.Cursor(java.awt.Cursor.SE_RESIZE_CURSOR)))
         .pointerInput(fieldHeight) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                if (down.type == PointerType.Touch) resizedByTouch = true
                 val startHeight=currentHeight
-                val startScreenY=runCatching{java.awt.MouseInfo.getPointerInfo().location.y}.getOrNull()
+                // 手指按住时鼠标指针可能停在别处，MouseInfo 采到的是鼠标而不是手指，触摸只用局部位移。
+                val startScreenY=if(down.type==PointerType.Touch)null else runCatching{java.awt.MouseInfo.getPointerInfo().location.y}.getOrNull()
                 var fallbackDelta=0f
                 while (true) {
                     val event = awaitPointerEvent(PointerEventPass.Initial)

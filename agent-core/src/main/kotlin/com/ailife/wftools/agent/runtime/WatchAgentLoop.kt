@@ -243,6 +243,8 @@ class WatchAgentLoop(
         is WatchAgentInspectFaceResult -> mapOf(
             "revision" to value.revision, "name" to value.name, "format" to value.format,
             "layers" to jsonValue(value.layers), "assets" to jsonValue(value.assets),
+            "layers_parsed" to value.layersParsed, "layers_in_xml" to value.layersInXml,
+            "parse_status" to value.parseStatus,
             "has_global_script" to value.hasGlobalScript, "preview_available" to value.previewAvailable,
             "capabilities" to jsonValue(value.capabilities),
         )
@@ -267,6 +269,9 @@ class WatchAgentLoop(
             "revision" to value.revision, "target" to value.target,
             "renderer" to value.renderer, "available" to value.available,
             "image_byte_count" to (value.imageBytes?.size ?: 0), "diagnostics" to jsonValue(value.diagnostics),
+            "rendered_layers" to value.renderedLayerCount,
+            "non_background_pixel_ratio" to value.nonBackgroundPixelRatio,
+            "renderer_warning" to value.rendererWarning,
         )
         else -> value.toString()
     }

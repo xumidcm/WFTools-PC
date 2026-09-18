@@ -1,5 +1,6 @@
 package com.ailife.wftools.pc
 
+import androidx.compose.ui.geometry.Offset
 import com.ailife.wftools.pc.core.EditorLayer
 import java.nio.file.Path
 import java.util.Locale
@@ -34,6 +35,19 @@ fun documentInsertionIndex(visualOrder: List<String>, selected: Set<String>, vis
     val remaining = visualOrder.count { it !in selected }
     val before = visualOrder.take(visualGap.coerceIn(0, visualOrder.size)).count { it !in selected }
     return remaining - before
+}
+
+/**
+ * Converts an incremental pointer move into a panel-size delta in dp.
+ *
+ * Both points must be in a coordinate space that does not move with the layout
+ * (window coordinates). Measuring inside the splitter itself would cancel out the
+ * movement of the splitter, which is what made the handle feel heavy.
+ */
+fun splitterDragDelta(horizontal: Boolean, fromWindow: Offset, toWindow: Offset, density: Float): Float {
+    require(density > 0f) { "density must be positive" }
+    val pixels = if (horizontal) toWindow.y - fromWindow.y else toWindow.x - fromWindow.x
+    return pixels / density
 }
 fun canonicalIdentity(path: Path): String = runCatching { path.toRealPath().toString() }.getOrElse { path.toAbsolutePath().normalize().toString() }.lowercase(Locale.ROOT)
 enum class DropBatch { WATCHES, ASSETS, MIXED, EMPTY }

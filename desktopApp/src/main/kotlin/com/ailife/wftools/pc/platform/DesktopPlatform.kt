@@ -23,6 +23,34 @@ fun desktopPlatformLabel(os:DesktopOperatingSystem=desktopOperatingSystem()):Str
     DesktopOperatingSystem.OTHER -> "桌面版"
 }
 
+/**
+ * The user's real Downloads folder when the platform can report it.
+ *
+ * Download folders are routinely redirected (Windows known folder, XDG user dirs), so guessing
+ * `~/Downloads` would put files somewhere the user does not look. Returns null when the platform
+ * cannot answer, and the caller falls back to its own default.
+ */
+fun knownDownloadsDirectory(os:DesktopOperatingSystem=desktopOperatingSystem()):Path? = when(os) {
+    DesktopOperatingSystem.WINDOWS -> runCatching {
+        com.sun.jna.platform.win32.Shell32Util.getKnownFolderPath(com.sun.jna.platform.win32.KnownFolders.FOLDERID_Downloads)
+    }.getOrNull()?.takeIf(String::isNotBlank)?.let{Path.of(it)}
+    DesktopOperatingSystem.LINUX -> runCatching {
+        val home=Path.of(System.getProperty("user.home"))
+        val config=environmentValue("XDG_CONFIG_HOME")?.takeIf{it.startsWith('/')}?.let{Path.of(it)} ?: home.resolve(".config")
+        val userDirs=config.resolve("user-dirs.dirs")
+        if(!Files.isRegularFile(userDirs)) null else Files.readAllLines(userDirs).asSequence()
+            .mapNotNull{Regex("^\\s*XDG_DOWNLOAD_DIR\\s*=\\s*\"(.+)\"\\s*$").find(it)?.groupValues?.get(1)}
+            .firstOrNull()
+            ?.replace("\$HOME",home.toString())
+            ?.takeIf{it.startsWith('/')}
+            ?.let{Path.of(it)}
+    }.getOrNull()
+    DesktopOperatingSystem.MACOS -> Path.of(System.getProperty("user.home"),"Downloads").takeIf(Files::isDirectory)
+    DesktopOperatingSystem.OTHER -> null
+}
+
+private fun environmentValue(name:String):String?=System.getenv(name)
+
 fun fileManagerRevealCommand(path:Path,os:DesktopOperatingSystem=desktopOperatingSystem()):List<String> {
     val absolute=path.normalize()
     return when(os) {

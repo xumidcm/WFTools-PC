@@ -2,6 +2,7 @@
 package com.ailife.wftools.pc
 
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -14,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -61,23 +63,41 @@ internal fun performFileAssociationAction(
 
 @Composable fun HomeContent(app: EditorApplicationModel,onOpen: () -> Unit,onNew: () -> Unit,modifier: Modifier = Modifier,
     theme: ThemePreference = ThemePreference.SYSTEM,onTheme: (ThemePreference) -> Unit = {},
-    openExternal:(String)->Unit=::openExternalUrl) {
+    openExternal:(String)->Unit=::openExternalUrl,onMarket: () -> Unit = {}) {
     var settings by remember { mutableStateOf(false) }
     var logoClicks by remember { mutableIntStateOf(0) }
     var lastLogoClick by remember { mutableLongStateOf(0L) }
+    var titleClicks by remember { mutableIntStateOf(0) }
+    var lastTitleClick by remember { mutableLongStateOf(0L) }
+    // 连点彩蛋不要水波纹：满屏涟漪很干扰，也不像"隐藏入口"。
+    val quietClick = remember { MutableInteractionSource() }
+    val quietTitleClick = remember { MutableInteractionSource() }
     fun open(url:String,label:String){runCatching{openExternal(url)}.onFailure{app.error="无法打开$label：${it.message}"}}
     Box(modifier.padding(28.dp)) {
         Column(Modifier.fillMaxSize().widthIn(max=960.dp).align(Alignment.Center)) {
             Column(Modifier.fillMaxWidth().testTag("home-fixed-header"),verticalArrangement=Arrangement.spacedBy(18.dp)) {
                 Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(16.dp)) {
-                    Image(painterResource("icons/wftools.png"),null,Modifier.size(56.dp).testTag("home-logo").clickable {
-                        val now=System.currentTimeMillis()
-                        logoClicks=if(now-lastLogoClick<=1200L)logoClicks+1 else 1
-                        lastLogoClick=now
-                        if(logoClicks>=5){logoClicks=0;open("https://www.bilibili.com/video/BV1GJ411x7h7","彩蛋视频")}
-                    })
-                    Column { Text("WFTools-PC",style=MaterialTheme.typography.headlineMedium);Text("WatchMaker 表盘编辑器",color=MaterialTheme.colorScheme.onSurfaceVariant) }
+                    // 彩蛋第一级：连点图标 5 下唤醒。解锁后设置里才会出现受保护表盘开关。
+                    Image(painterResource("icons/wftools.png"),null,Modifier.size(56.dp).testTag("home-logo")
+                        .clickable(interactionSource=quietClick,indication=null) {
+                            val now=System.currentTimeMillis()
+                            logoClicks=if(now-lastLogoClick<=1200L)logoClicks+1 else 1
+                            lastLogoClick=now
+                            if(logoClicks>=5){logoClicks=0;app.unlockProtectedFaces();open("https://www.bilibili.com/video/BV1GJ411x7h7","彩蛋视频")}
+                        })
+                    Column {
+                        // 彩蛋第二级：解锁之后还要连点标题 5 下，才真正打开"编辑受保护表盘"。
+                        Text("WFTools-PC",style=MaterialTheme.typography.headlineMedium,modifier=Modifier.testTag("home-title")
+                            .clickable(interactionSource=quietTitleClick,indication=null,enabled=app.protectedFaces.unlocked) {
+                                val now=System.currentTimeMillis()
+                                titleClicks=if(now-lastTitleClick<=1200L)titleClicks+1 else 1
+                                lastTitleClick=now
+                                if(titleClicks>=5){titleClicks=0;app.updateProtectedFaces(app.protectedFaces.copy(allowEditing=true))}
+                            })
+                        Text("WatchMaker 表盘编辑器",color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
+                // 创建 / 打开 / 市场 排在同一排，市场在最右。
                 Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) {
                     Card(onClick=onNew,modifier=Modifier.weight(1f).testTag("home-new"),shape=RoundedCornerShape(16.dp),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.primaryContainer)) {
                         Row(Modifier.fillMaxWidth().padding(20.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) { Icon(Icons.Default.Add,null,Modifier.size(30.dp));Column { Text("创建新表盘",fontWeight=FontWeight.Bold);Text("矩形 · 512 × 512",style=MaterialTheme.typography.bodySmall) } }
@@ -85,6 +105,7 @@ internal fun performFileAssociationAction(
                     Card(onClick=onOpen,modifier=Modifier.weight(1f).testTag("home-open"),shape=RoundedCornerShape(16.dp),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.surfaceVariant)) {
                         Row(Modifier.fillMaxWidth().padding(20.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) { Icon(Icons.Default.FolderOpen,null,Modifier.size(30.dp));Column { Text("打开表盘",fontWeight=FontWeight.Bold);Text("选择或拖入 .watch 文件",style=MaterialTheme.typography.bodySmall) } }
                     }
+                    MarketEntryCard(onMarket,Modifier.weight(1f),openExternal)
                 }
                 Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                     Text("最近打开",Modifier.weight(1f),style=MaterialTheme.typography.titleLarge)
@@ -103,12 +124,15 @@ internal fun performFileAssociationAction(
             app.error?.let { ErrorBanner(it){app.error=null} }
             HorizontalDivider(Modifier.padding(top=8.dp),color=MaterialTheme.colorScheme.outlineVariant)
             Row(Modifier.fillMaxWidth().testTag("home-fixed-footer").padding(top=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-                Surface(onClick={open("https://bilibili.com/space/1609437970","作者主页")},modifier=Modifier.weight(1f).testTag("developer-profile-link"),shape=RoundedCornerShape(12.dp),color=Color.Transparent) {
+                // 点击区只覆盖头像与文字：不要给 Surface 加 weight，否则空白区域也会变成
+                // 可点区域。用后面的 Spacer 把右侧的「设置」推到边缘。
+                Surface(onClick={open("https://bilibili.com/space/1609437970","作者主页")},modifier=Modifier.testTag("developer-profile-link"),shape=RoundedCornerShape(12.dp),color=Color.Transparent) {
                     Row(Modifier.padding(6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
                         Image(painterResource("branding/developer.png"),"开发者头像",Modifier.size(46.dp).clip(CircleShape),contentScale=ContentScale.Crop)
                         Column { Text("开发者 · 柚子皮",Modifier.testTag("developer-attribution"),fontWeight=FontWeight.SemiBold);Text("QQ · 3513903055",style=MaterialTheme.typography.bodySmall);Text(desktopPlatformLabel(),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant) }
                     }
                 }
+                Spacer(Modifier.weight(1f))
                 Column(horizontalAlignment=Alignment.End) {
                     TextButton(onClick={settings=true},modifier=Modifier.testTag("home-settings")){Icon(Icons.Default.Settings,null,Modifier.size(17.dp));Spacer(Modifier.width(6.dp));Text("设置")}
                     TextButton(onClick={open("https://gitlab.com/ailife8881/wftools","上游链接")}) { Text("上游 AILIFE · GitLab",Modifier.testTag("upstream-attribution")) }
@@ -170,6 +194,8 @@ internal fun performFileAssociationAction(
     var imageModel by remember { mutableStateOf(app.agentSettings.imageModelId.orEmpty()) }
     var imageKey by remember { mutableStateOf("") }
     var searchEndpoint by remember { mutableStateOf(app.agentSettings.searchEndpoint.orEmpty()) }
+    var searchMaxResults by remember { mutableStateOf(app.agentSettings.searchMaxResults.toString()) }
+    var searchDepth by remember { mutableStateOf(SearchDepth.parse(app.agentSettings.searchDepth)) }
     var searchKey by remember { mutableStateOf("") }
     var diagnostics by remember { mutableStateOf("") }
     val settingsScroll = rememberScrollState()
@@ -340,6 +366,48 @@ internal fun performFileAssociationAction(
             OutlinedTextField(imageModel, { imageModel = it; agent = agent.copy(imageModelId = it.takeIf(String::isNotBlank)); app.updateAgentSettings(agent) }, Modifier.fillMaxWidth(), label = { Text("图片模型 ID · 可选") }, singleLine = true)
             OutlinedTextField(imageKey, { imageKey = it }, Modifier.fillMaxWidth(), label = { Text("图片接口 API Key · 可留空") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
             OutlinedTextField(searchEndpoint, { searchEndpoint = it; agent = agent.copy(searchEndpoint = it.takeIf(String::isNotBlank)); app.updateAgentSettings(agent) }, Modifier.fillMaxWidth(), label = { Text("搜索接口 · 可选") }, singleLine = true)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    searchMaxResults,
+                    { raw ->
+                        // 输入过程中只保留字面量，越界不写设置；否则 "99" 会被静默折叠成 20，
+                        // 输入框显示的值与实际生效的值就分家了。
+                        val digits = raw.filter(Char::isDigit).take(2)
+                        searchMaxResults = digits
+                        digits.toIntOrNull()?.takeIf { it in SearchResultCount.MIN..SearchResultCount.MAX }?.let { value ->
+                            agent = agent.copy(searchMaxResults = value)
+                            app.updateAgentSettings(agent)
+                        }
+                    },
+                    Modifier.width(140.dp).testTag("agent-search-max-results").onFocusChanged { state ->
+                        // 失焦时归一化，保证「完成」保存的是输入框里真正显示的数值。
+                        if (!state.isFocused) {
+                            val normalized = SearchResultCount.parse(searchMaxResults)
+                            searchMaxResults = normalized.toString()
+                            agent = agent.copy(searchMaxResults = normalized)
+                            app.updateAgentSettings(agent)
+                        }
+                    },
+                    label = { Text("搜索条数") },
+                    singleLine = true,
+                    isError = searchMaxResults.isNotEmpty() && !SearchResultCount.isInRange(searchMaxResults),
+                    supportingText = { Text("${SearchResultCount.MIN}–${SearchResultCount.MAX}") },
+                )
+                Column(Modifier.weight(1f)) {
+                    Text("搜索深度", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SearchDepth.entries.forEach { option ->
+                            FilterChip(
+                                selected = searchDepth == option,
+                                onClick = { searchDepth = option; agent = agent.copy(searchDepth = option.wire); app.updateAgentSettings(agent) },
+                                label = { Text(option.label) },
+                                modifier = Modifier.testTag("agent-search-depth-${option.wire}"),
+                            )
+                        }
+                    }
+                }
+            }
+            Text(searchDepth.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedTextField(searchKey, { searchKey = it }, Modifier.fillMaxWidth(), label = { Text("搜索接口 API Key · 可留空") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
             OutlinedButton(onClick = {
                 app.agentProviderStore.saveImageApiKey(imageKey)
@@ -402,6 +470,17 @@ internal fun performFileAssociationAction(
             FilterChip(selected=DesktopI18n.language()==DesktopLanguage.ENGLISH,onClick={DesktopI18n.setLanguage(DesktopLanguage.ENGLISH)},label={Text("English")})
         }
         Text("界面语言只影响 WFTools-PC 文案，不会修改表盘内容。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        // 隐藏项：只有两级彩蛋都触发过才出现。
+        if (app.protectedFaces.unlocked) {
+            HorizontalDivider()
+            Text("高级",style=MaterialTheme.typography.titleSmall)
+            HomeCanvasInputSwitch(
+                "直接编辑受保护表盘",
+                app.protectedFaces.allowEditing,
+                "home-edit-protected-toggle",
+            ) { app.updateProtectedFaces(app.protectedFaces.copy(allowEditing=it)) }
+            Text("受保护表盘（含 watch.pxml）将直接解密后打开编辑，不再提示。另存为时会写成普通可编辑表盘；未修改就保存则原文件保持原样。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         HorizontalDivider()
         Text("画布操作",style=MaterialTheme.typography.titleSmall)
         HomeCanvasInputSwitch("中键拖动画布",canvasInput.middleButtonPan,"home-middle-button-pan-toggle"){onCanvasInput(canvasInput.copy(middleButtonPan=it))}
@@ -410,7 +489,7 @@ internal fun performFileAssociationAction(
         HomeCanvasInputSwitch("自动吸附",canvasInput.snapping,"home-automatic-snapping-toggle"){onCanvasInput(canvasInput.copy(snapping=it))}
         HomeCanvasInputSwitch("变换控制点",canvasInput.showTransformHandles,"home-transform-handles-toggle"){onCanvasInput(canvasInput.copy(showTransformHandles=it))}
         HomeCanvasInputSwitch("显示操作状态提示",canvasInput.showOperationStatus,"home-operation-status-toggle"){onCanvasInput(canvasInput.copy(showOperationStatus=it))}
-        Text("鼠标直拖模式：按住图层即可移动，拖动未选中的图层会切换目标。\n先选后拖模式没有选择元素时，左键拖动表盘。选择元素后，可从画布任意位置拖动选区。\n中键或右键拖动：对应开关开启时平移整个表盘。\n滚轮：开关开启时可缩放光标下的选中元素；关闭后始终缩放整个表盘。\n自动吸附会在移动和变换时对齐画布及其他元素；变换控制点可显示八向缩放点和旋转拉杆；操作状态提示只用于显示耗时任务进度。\n空格 + 左键或 Ctrl + 左键：临时拖动画布；Ctrl + 滚轮：始终缩放整个表盘。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("鼠标直拖模式：侧边栏选中的图层优先，按住画布任意位置拖动都会移动当前选区；没有选中时按住某个图层即可选中并直接移动。\n先选后拖模式与直拖相同，区别是没有选中时按住图层只选中、不移动。\n单击其它图层会改选它，单击空白处清空选择。\n中键或右键拖动：对应开关开启时平移整个表盘。\n滚轮：开关开启时可缩放光标下的选中元素；关闭后始终缩放整个表盘。\n自动吸附会在移动和变换时对齐画布及其他元素；变换控制点可显示八向缩放点和旋转拉杆；操作状态提示只用于显示耗时任务进度。\n空格 + 左键或 Ctrl + 左键：临时拖动画布；Ctrl + 滚轮：始终缩放整个表盘。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider()
         Text("文件格式关联",style=MaterialTheme.typography.titleSmall)
         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
@@ -434,6 +513,21 @@ internal fun performFileAssociationAction(
     Row(Modifier.fillMaxWidth().testTag(tag).clickable{onChecked(!checked)}.padding(vertical=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
         Text(label,Modifier.weight(1f))
         Switch(checked,onCheckedChange=null)
+    }
+}
+
+/** 首页的市场入口卡片：与「创建 / 打开」同排并排在最右。浏览器入口只在市场窗口里提供。 */
+@Composable private fun MarketEntryCard(onOpenMarket:()->Unit,modifier:Modifier=Modifier,openExternal:(String)->Unit=::openExternalUrl) {
+    Card(modifier=modifier.testTag("home-watch-market"),onClick=onOpenMarket,shape=RoundedCornerShape(16.dp),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.tertiaryContainer)) {
+        Column(Modifier.fillMaxWidth().padding(14.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+          Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
+            Icon(Icons.Default.Storefront,null,Modifier.size(30.dp))
+            Column { Text("表盘市场",fontWeight=FontWeight.Bold);Text("下载后可直接打开编辑",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha=.8f)) }
+          }
+          TextButton(onClick={runCatching{openExternal(WatchMarket.HOME_URL)}},modifier=Modifier.testTag("home-market-web"),contentPadding=PaddingValues(horizontal=4.dp,vertical=0.dp)) {
+            Icon(Icons.Default.OpenInNew,null,Modifier.size(15.dp));Spacer(Modifier.width(4.dp));Text("在浏览器打开")
+          }
+        }
     }
 }
 

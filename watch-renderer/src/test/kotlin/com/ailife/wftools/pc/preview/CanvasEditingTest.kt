@@ -3,19 +3,39 @@ package com.ailife.wftools.pc.preview
 import org.junit.Assert.*
 import org.junit.Test
 import com.ailife.wftools.pc.core.LayerSelection
+import com.ailife.wftools.pc.input.TouchTargets
+import com.ailife.wftools.pc.input.isLongPress
 import java.awt.Cursor
 
 class CanvasEditingTest {
-    @Test fun `direct drag captures the layer under the pointer instead of the old selection`() {
-        assertEquals(setOf("other"), canvasDragTargets(CanvasOperationMode.DIRECT_DRAG, "other", setOf("old")))
-        assertEquals(setOf("a", "b"), canvasDragTargets(CanvasOperationMode.DIRECT_DRAG, "b", setOf("a", "b")))
-        assertTrue(canvasDragTargets(CanvasOperationMode.DIRECT_DRAG, null, setOf("old")).isEmpty())
+    @Test fun `direct drag keeps the sidebar selection instead of stealing the layer under the pointer`() {
+        assertEquals(setOf("selected"), canvasDragTargets(CanvasOperationMode.DIRECT_DRAG, "other", setOf("selected")))
+    }
+
+    @Test fun `direct drag follows the selection even when pressing empty canvas`() {
+        assertEquals(setOf("selected"), canvasDragTargets(CanvasOperationMode.DIRECT_DRAG, null, setOf("selected")))
+    }
+
+    @Test fun `direct drag adopts the pointer layer only while nothing is selected`() {
+        assertEquals(setOf("first"), canvasDragTargets(CanvasOperationMode.DIRECT_DRAG, "first", emptySet()))
+        assertTrue(canvasDragTargets(CanvasOperationMode.DIRECT_DRAG, null, emptySet()).isEmpty())
+    }
+
+    @Test fun `a press adopts the hit layer only in direct drag with an empty selection`() {
+        assertTrue(canvasPressAdoptsHit(CanvasOperationMode.DIRECT_DRAG, emptySet()))
+        assertFalse(canvasPressAdoptsHit(CanvasOperationMode.DIRECT_DRAG, setOf("selected")))
+        assertFalse(canvasPressAdoptsHit(CanvasOperationMode.SELECT_THEN_DRAG, emptySet()))
     }
 
     @Test fun `pressing inside a multi selection keeps the group until click release`() {
         val current = LayerSelection(setOf("a", "b"), "a", "a")
         assertEquals(current, canvasPressSelection(current, "b", listOf("a", "b", "c"), ctrl = false, shift = false))
         assertEquals(setOf("c"), canvasPressSelection(current, "c", listOf("a", "b", "c"), ctrl = false, shift = false).selected)
+    }
+
+    @Test fun `direct drag preserves the whole group wherever the pointer lands`() {
+        assertEquals(setOf("a", "b"), canvasDragTargets(CanvasOperationMode.DIRECT_DRAG, "b", setOf("a", "b")))
+        assertEquals(setOf("a", "b"), canvasDragTargets(CanvasOperationMode.DIRECT_DRAG, "c", setOf("a", "b")))
     }
 
     @Test fun `empty and already persisted live attributes are removed before handoff`() {
@@ -164,5 +184,92 @@ class CanvasEditingTest {
         assertFalse(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.DIRECT_DRAG,emptySet()))
         assertTrue(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.DIRECT_DRAG,setOf("layer"),spaceDown=true))
         assertTrue(canvasDragPans(CanvasDragButton.PRIMARY,CanvasOperationMode.DIRECT_DRAG,setOf("layer"),ctrlPrimary=true))
+    }
+
+    @Test fun `a still touch hold becomes the context menu because touch has no right button`() {
+        val slop = touchHoldSlopDp(touch = true)
+        assertTrue("长按容差必须为正，否则手指抖动会让长按永不成立", slop > 0f)
+        assertEquals(
+            TouchGestureIntent.CONTEXT_MENU,
+            touchHoldIntent(TouchTargets.LONG_PRESS_MILLIS, 0f, slop),
+        )
+        assertEquals(
+            "刚好到阈值也应成立",
+            TouchGestureIntent.CONTEXT_MENU,
+            touchHoldIntent(TouchTargets.LONG_PRESS_MILLIS + 200, slop, slop),
+        )
+    }
+
+    @Test fun `a touch hold that moves becomes a pan instead of a menu`() {
+        val slop = touchHoldSlopDp(touch = true)
+        assertEquals(TouchGestureIntent.MOVE, touchHoldIntent(TouchTargets.LONG_PRESS_MILLIS + 500, slop + 1f, slop))
+        assertEquals("移动后不再有长按", TouchGestureIntent.MOVE, touchHoldIntent(50, slop + 1f, slop))
+    }
+
+    @Test fun `a short still touch is neither a menu nor a pan yet`() {
+        val slop = touchHoldSlopDp(touch = true)
+        assertEquals(TouchGestureIntent.NONE, touchHoldIntent(120, 0f, slop))
+        assertEquals(TouchGestureIntent.NONE, touchHoldIntent(TouchTargets.LONG_PRESS_MILLIS - 1, 0f, slop))
+    }
+
+    @Test fun `the hold intent stays consistent with the shared long press contract`() {
+        val slop = touchHoldSlopDp(touch = true)
+        listOf(0L, 100L, 499L, 500L, 800L).forEach { elapsed ->
+            listOf(0f, slop, slop + 0.5f).forEach { movement ->
+                val longPress = isLongPress(elapsed, movement, slop)
+                assertEquals(
+                    "elapsed=$elapsed movement=$movement 时两者必须一致",
+                    longPress,
+                    touchHoldIntent(elapsed, movement, slop) == TouchGestureIntent.CONTEXT_MENU,
+                )
+            }
+        }
+    }
+
+    @Test fun `a long press outranks a double tap so the two cannot swallow each other`() {
+        val slop = touchHoldSlopDp(touch = true)
+        assertEquals(
+            "长按成立时优先是菜单，不能变成文字编辑",
+            TouchGestureIntent.CONTEXT_MENU,
+            touchHoldIntent(TouchTargets.LONG_PRESS_MILLIS, 0f, slop, doubleTapCandidate = true),
+        )
+        assertEquals(
+            "没到长按时，双击候选才生效",
+            TouchGestureIntent.TEXT_EDIT,
+            touchHoldIntent(120, 0f, slop, doubleTapCandidate = true),
+        )
+    }
+
+    @Test fun `text edit double tap needs the same target inside the window and a close landing`() {
+        val slop = doubleTapSlopDp(touch = true)
+        assertTrue(isTextEditDoubleTap(true, 200, 0f, slop))
+        assertFalse("不同目标不是双击", isTextEditDoubleTap(false, 200, 0f, slop))
+        assertFalse("超出时间窗不是双击", isTextEditDoubleTap(true, DOUBLE_TAP_WINDOW_MILLIS + 1, 0f, slop))
+        assertFalse("落点太远不是双击", isTextEditDoubleTap(true, 200, slop + 1f, slop))
+        assertFalse("同一时刻的重复事件不算双击", isTextEditDoubleTap(true, 0, 0f, slop))
+    }
+
+    @Test fun `touch gets larger handles and a slacker double tap than the mouse`() {
+        assertTrue(transformHandleHitRadiusDp(true) > transformHandleHitRadiusDp(false))
+        assertTrue(doubleTapSlopDp(true) > doubleTapSlopDp(false))
+        assertEquals("触屏命中半径应按 44dp 目标放宽", TouchTargets.MIN_TOUCH_DP / 2f, transformHandleHitRadiusDp(true))
+    }
+
+    @Test fun `the mouse keeps its previous handle and double tap tolerances`() {
+        assertEquals(12f, transformHandleHitRadiusDp(false))
+        assertEquals("鼠标双击落点容差保持原值", 12f, doubleTapSlopDp(false))
+    }
+
+    @Test fun `the context menu probe starts at the finger and stays inside its slop`() {
+        val probes = contextMenuHitProbes(10f)
+        assertEquals("落点本身必须第一个被取样", Point(0.0, 0.0), probes.first())
+        assertEquals(5, probes.size)
+        assertEquals(5, probes.distinct().size)
+        probes.forEach { probe ->
+            assertTrue("探针不能超出容差", kotlin.math.abs(probe.x) <= 10.0 && kotlin.math.abs(probe.y) <= 10.0)
+        }
+        assertTrue("必须包含邻近取样点，细图层才选得中", probes.any { it != Point(0.0, 0.0) })
+        assertEquals("鼠标不需要落点补偿", 0f, contextMenuHitSlopDp(touch = false))
+        assertTrue(contextMenuHitSlopDp(touch = true) > 0f)
     }
 }

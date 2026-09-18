@@ -124,9 +124,9 @@ class EditorRedContractsTest {
         compose.onNodeWithContentDescription("更多操作").performClick()
         compose.onNodeWithTag("workspace-settings-entry").performClick()
         compose.onNodeWithText("鼠标直拖").assertExists(); compose.onNodeWithText("先选后拖").assertExists()
-        compose.onNodeWithText("按住图层即可移动，拖动未选中的图层时自动切换目标。").assertExists()
+        compose.onNodeWithText("侧边栏选中的图层优先：按住画布任意位置拖动都移动当前选区；没有选中时按住某个图层即可选中并移动。").assertExists()
         compose.onNodeWithText("先选后拖").performClick()
-        compose.onNodeWithText("先点击选择图层，再从画布任意位置拖动当前选区。").assertExists()
+        compose.onNodeWithText("与鼠标直拖相同，但没有选中时按住图层只选中、不移动。").assertExists()
     }
 
     @Test fun `preview zoom control offers ten to two hundred percent without a current summary row`() {
@@ -393,6 +393,39 @@ class EditorRedContractsTest {
         compose.setContent { WFToolsTheme(false) { Box(Modifier.width(120.dp).height(500.dp)) { Splitter(false,"left-panel-splitter"){moved+=it} } } }
         compose.onNodeWithTag("left-panel-splitter").performMouseInput { moveTo(center);press();moveBy(Offset(36f,0f));release() }
         compose.runOnIdle { assertTrue("侧栏必须跟随这次短拖动，实际位移=$moved",moved>20f) }
+    }
+
+    /**
+     * Guards the gross behaviour of a splitter drag across a live-resizing panel: the panel must
+     * move by the pointer's total travel, not by a fraction of it.
+     *
+     * Note this passes for both the window-coordinate implementation and the earlier local
+     * `dragAmount` one, because the harness settles layout before each pointer event. It is a
+     * regression guard against a stalled or badly scaled splitter, not a reproduction of the
+     * reported "heavy" feel, which needs a real window to observe.
+     */
+    @Test fun `a resizing splitter accumulates the pointer's full travel`() {
+        var width by mutableStateOf(200f)
+        compose.setContent { WFToolsTheme(false) { Box(Modifier.width(600.dp).height(400.dp)) { Row(Modifier.fillMaxSize()) {
+            Box(Modifier.width(width.dp).fillMaxHeight())
+            Splitter(false,"left-panel-splitter"){width=(width+it).coerceIn(180f,520f)}
+            Box(Modifier.weight(1f).fillMaxHeight())
+        } } } }
+        val bounds = compose.onNodeWithTag("left-panel-splitter").getUnclippedBoundsInRoot()
+        val scale = compose.density.density
+        val y = (bounds.top.value + bounds.bottom.value) / 2f * scale
+        val startX = (bounds.left.value + bounds.right.value) / 2f * scale
+        compose.onRoot().performMouseInput { moveTo(Offset(startX, y)); press() }
+        // Six 30px steps: about 180dp of real pointer travel at density 1.
+        repeat(6) { step ->
+            compose.onRoot().performMouseInput { moveTo(Offset(startX + (step + 1) * 30f, y)) }
+            compose.waitForIdle()
+        }
+        compose.onRoot().performMouseInput { release() }
+        compose.runOnIdle {
+            val delta = width - 200f
+            assertTrue("面板宽度应跟随指针总行程（约 180dp），实际=$delta", delta > 150f)
+        }
     }
 
     @Test fun `save as is placed immediately to the right of save`() {

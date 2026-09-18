@@ -31,7 +31,7 @@ import com.ailife.wftools.pc.preview.CanvasOperationMode
             "canvas" -> {
                 Text("操作方式",Modifier.padding(horizontal = 16.dp,vertical = 6.dp),style = MaterialTheme.typography.labelMedium,color = MaterialTheme.colorScheme.primary)
                 listOf(CanvasOperationMode.DIRECT_DRAG to "鼠标直拖",CanvasOperationMode.SELECT_THEN_DRAG to "先选后拖").forEach { (mode,label) -> DropdownMenuItem(text = { Text(label) },leadingIcon = { RadioButton(doc.preview.operationMode == mode,null) },onClick = { doc.preview = doc.preview.copy(operationMode = mode) }) }
-                Text(if(doc.preview.operationMode==CanvasOperationMode.DIRECT_DRAG)"按住图层即可移动，拖动未选中的图层时自动切换目标。" else "先点击选择图层，再从画布任意位置拖动当前选区。",Modifier.widthIn(max=270.dp).padding(horizontal=16.dp,vertical=6.dp),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if(doc.preview.operationMode==CanvasOperationMode.DIRECT_DRAG)"侧边栏选中的图层优先：按住画布任意位置拖动都移动当前选区；没有选中时按住某个图层即可选中并移动。" else "与鼠标直拖相同，但没有选中时按住图层只选中、不移动。",Modifier.widthIn(max=270.dp).padding(horizontal=16.dp,vertical=6.dp),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 HorizontalDivider()
                 DropdownMenuItem(text={Text("中键拖动画布")},modifier=Modifier.testTag("editor-middle-button-pan-toggle"),trailingIcon={Checkbox(canvasInput.middleButtonPan,null)},onClick={onCanvasInput(canvasInput.copy(middleButtonPan=!canvasInput.middleButtonPan))})
                 DropdownMenuItem(text={Text("右键拖动画布")},modifier=Modifier.testTag("editor-right-button-pan-toggle"),trailingIcon={Checkbox(canvasInput.rightButtonPan,null)},onClick={onCanvasInput(canvasInput.copy(rightButtonPan=!canvasInput.rightButtonPan))})

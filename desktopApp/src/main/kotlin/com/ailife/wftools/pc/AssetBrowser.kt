@@ -20,8 +20,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import com.ailife.wftools.pc.core.EditorLayer
+import com.ailife.wftools.pc.input.*
 import com.ailife.wftools.pc.platform.chooseAssets
 import com.ailife.wftools.pc.platform.showInFileManager
+import kotlinx.coroutines.withTimeoutOrNull
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import kotlin.math.roundToInt
@@ -30,6 +32,10 @@ import kotlin.math.roundToInt
     var selected by remember { mutableStateOf<AssetItem?>(null) };var menu by remember { mutableStateOf<Pair<AssetItem,Offset>?>(null) }
     var delete by remember { mutableStateOf<AssetItem?>(null) };var dragged by remember { mutableStateOf<AssetItem?>(null) }
     var listBounds by remember { mutableStateOf(Rect.Zero) }
+    /** 触屏模式：长按呼出菜单、滚动条加宽；鼠标（默认）行为完全不变。 */
+    var touchMode by remember { mutableStateOf(false) }
+    /** 滚动条在触屏下加宽便于手指抓取，鼠标沿用原来的 8dp。 */
+    val scrollbarWidth=if(touchMode)splitterThicknessDp(true).dp else 8.dp
     val listState=rememberLazyListState();val focus=LocalFocusManager.current;val assets by rememberUpdatedState(doc.view.assets)
     LaunchedEffect(assets){selected=selected?.let{old->assets.firstOrNull{it.relative==old.relative}}}
     DisposableEffect(drops){onDispose{drops.library=null}}
@@ -48,6 +54,7 @@ import kotlin.math.roundToInt
         selected?.let{asset-> if(compatibleAssetSelection(asset,doc.view.layers,doc.view.selection.selected).isNotEmpty())TextButton({apply(asset)},enabled=!doc.editingBlocked,modifier=Modifier.padding(horizontal=8.dp)){Text("应用到选中图层")} }
         Text(if(dragged!=null)"拖到画布释放以创建图层" else "拖入此页仅入库；将卡片拖到画布可创建图层",Modifier.padding(horizontal=12.dp,vertical=4.dp),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned{listBounds=it.boundsInWindow()}.onPointerEvent(PointerEventType.Press){event->
+            if(event.isFromTouch())touchMode=true
             if(event.buttons.isSecondaryPressed&&!doc.editingBlocked){
                 val point=event.changes.firstOrNull()?.position ?: return@onPointerEvent
                 if(point.x>listState.layoutInfo.viewportSize.width)return@onPointerEvent
@@ -59,14 +66,24 @@ import kotlin.math.roundToInt
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
                 if(doc.editingBlocked || down.position.x>size.width-10)return@awaitEachGesture
+                if(down.type==PointerType.Touch)touchMode=true
                 val row=listState.layoutInfo.visibleItemsInfo.firstOrNull{down.position.y>=it.offset&&down.position.y<it.offset+it.size} ?: return@awaitEachGesture
                 val asset=assets.firstOrNull{it.relative==row.key} ?: return@awaitEachGesture
                 focus.clearFocus();doc.focus=EditorFocus.OTHER;selected=asset
                 if(!currentEvent.buttons.isPrimaryPressed)return@awaitEachGesture
-                var moving=false
+                val longPressSlop=viewConfiguration.touchSlop*2f
+                val touchPointer=down.type==PointerType.Touch
+                var moving=false;var longPressFired=false
+                val startedAt=System.currentTimeMillis()
                 try {
                     while(true){
-                        val event=awaitPointerEvent(PointerEventPass.Initial);val change=event.changes.firstOrNull{it.id==down.id} ?: break
+                        // 只有触摸指针走长按超时；鼠标没有长按语义，按住停顿后仍可继续拖动。
+                        val event=if(touchPointer)withTimeoutOrNull(TouchTargets.LONG_PRESS_MILLIS){awaitPointerEvent(PointerEventPass.Initial)} else awaitPointerEvent(PointerEventPass.Initial)
+                        if(event==null){
+                            if(!moving&&assetTargetAttribute(asset)!=null){menu=asset to down.position;longPressFired=true}
+                            break
+                        }
+                        val change=event.changes.firstOrNull{it.id==down.id} ?: break
                         if(event.type==PointerEventType.Scroll)continue
                         if(!change.pressed){
                             if(moving){
@@ -75,10 +92,16 @@ import kotlin.math.roundToInt
                             }
                             break
                         }
-                        if(!moving&&(change.position-down.position).getDistance()>viewConfiguration.touchSlop&&assetTargetAttribute(asset)!=null){moving=true;dragged=asset}
+                        val travel=(change.position-down.position).getDistance()
+                        if(!moving&&travel>viewConfiguration.touchSlop&&assetTargetAttribute(asset)!=null){moving=true;dragged=asset}
                         if(moving)change.consume()
+                        else if(touchPointer&&isLongPress(System.currentTimeMillis()-startedAt,travel,longPressSlop)){if(assetTargetAttribute(asset)!=null){menu=asset to change.position;longPressFired=true};break}
                     }
-                }finally{dragged=null}
+                }finally{
+                    // 菜单已弹出的抬手不能退化成“应用到选中图层”。
+                    if(longPressFired)selected=null
+                    dragged=null
+                }
             }
         }) {
             LazyColumn(Modifier.fillMaxSize().padding(end=10.dp).testTag("asset-list"),state=listState) {
@@ -96,7 +119,7 @@ import kotlin.math.roundToInt
                 }
                 if(assets.isEmpty())item{Text("素材库为空\n导入图片、动画、视频或字体后会在此显示预览。",Modifier.padding(16.dp),style=MaterialTheme.typography.bodySmall)}
             }
-            VerticalScrollbar(rememberScrollbarAdapter(listState),Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical=4.dp).width(8.dp),style=desktopScrollbarStyle())
+            VerticalScrollbar(rememberScrollbarAdapter(listState),Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical=4.dp).width(scrollbarWidth),style=desktopScrollbarStyle())
             Box(Modifier.offset{IntOffset(menu?.second?.x?.roundToInt() ?: 0,menu?.second?.y?.roundToInt() ?: 0)}.size(1.dp)) {
                 DropdownMenu(menu!=null,{menu=null},modifier=Modifier.testTag("asset-context-menu")){menu?.first?.let{asset->
                     DropdownMenuItem(text={Text("创建图层")},enabled=assetTargetAttribute(asset)!=null&&!doc.editingBlocked,leadingIcon={Icon(Icons.Default.Add,null)},onClick={menu=null;doc.createLayerFromAsset(asset)})

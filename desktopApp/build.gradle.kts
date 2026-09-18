@@ -15,6 +15,10 @@ dependencies {
     implementation(compose.materialIconsExtended)
     implementation(libs.kotlinx.coroutines.core)
     implementation("com.google.code.gson:gson:2.10.1")
+    // The Windows common item dialog is reached through COM vtables. vlcj already ships JNA
+    // at runtime, but declaring it here makes the call sites compile and keeps one version.
+    implementation(libs.jna)
+    implementation(libs.jna.platform)
     testImplementation(libs.junit)
     testImplementation(compose.desktop.uiTestJUnit4)
 }

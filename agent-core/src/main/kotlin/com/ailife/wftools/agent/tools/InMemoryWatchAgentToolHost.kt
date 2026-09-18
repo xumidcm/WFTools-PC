@@ -38,11 +38,15 @@ class InMemoryWatchAgentToolHost(
         val root = document.documentElement
         val layers = mutableListOf<WatchAgentLayerSummary>()
         collectLayers(root, null, layers)
+        val xmlInspection = WatchAgentXmlInspector.inspect(watchXml)
         return WatchAgentInspectFaceResult(
             revision = revision,
             name = root.getAttribute("name").takeIf(String::isNotBlank),
             format = if (root.getAttribute("build_source").equals("studio", true)) "V2" else "V1",
             layers = layers,
+            layersParsed = layers.size,
+            layersInXml = xmlInspection.layersInXml,
+            parseStatus = if (layers.size == xmlInspection.layersInXml) "ok" else "mismatch",
             assets = assetsByPath.values.toList(),
             hasGlobalScript = globalScript.isNotBlank(),
             previewAvailable = false,
@@ -67,6 +71,7 @@ class InMemoryWatchAgentToolHost(
     override fun validateFace(request: WatchAgentValidateFaceRequest): WatchAgentValidationResult {
         checkReadRevision(request.expectedRevision)
         val diagnostics = mutableListOf<WatchAgentDiagnostic>()
+        var parsedLayerCount = 0
         val classifications = try {
             WatchAgentExpressionClassifier.classifyXml(watchXml)
         } catch (error: Throwable) {
@@ -77,12 +82,25 @@ class InMemoryWatchAgentToolHost(
             )
             emptyList()
         }
-        runCatching { parseWatchXml(watchXml) }.onFailure { error ->
+        runCatching { parseWatchXml(watchXml) }.onSuccess { document ->
+            val parsed = mutableListOf<WatchAgentLayerSummary>()
+            collectLayers(document.documentElement, null, parsed)
+            parsedLayerCount = parsed.size
+        }.onFailure { error ->
             diagnostics += WatchAgentDiagnostic(
                 WatchAgentDiagnosticSeverity.ERROR,
                 "invalid_xml",
                 error.message ?: "watch.xml 无法解析",
             )
+        }
+        runCatching { WatchAgentXmlInspector.inspect(watchXml) }.onSuccess { inspection ->
+            if (inspection.layersInXml != parsedLayerCount) {
+                diagnostics += WatchAgentDiagnostic(
+                    WatchAgentDiagnosticSeverity.ERROR,
+                    "layer_parse_mismatch",
+                    "XML 中发现 ${inspection.layersInXml} 个图层节点，但宿主只解析出 ${parsedLayerCount} 个；支持的图层元素应为 Layer(type=...)。",
+                )
+            }
         }
         validateGlobalScript(globalScript)?.let { diagnostics += it }
         PATH_PATTERN.findAll(watchXml).forEach { match ->

@@ -97,6 +97,10 @@ data class AgentFeatureSettings(
     val imageGenerationEndpoint: String? = null,
     val imageModelId: String? = null,
     val searchEndpoint: String? = null,
+    /** Tavily `max_results`; clamped to 1..20 when a request is built. */
+    val searchMaxResults: Int = 5,
+    /** Tavily `search_depth`: `basic` or `advanced`. */
+    val searchDepth: String = "basic",
 )
 
 enum class AgentGenerationStatus { THINKING, CALLING_TOOL, PROCESSING_PREVIEW, PROCESSING_FOLLOW_UP, COMPRESSING }

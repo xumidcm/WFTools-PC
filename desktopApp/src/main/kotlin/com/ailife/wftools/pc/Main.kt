@@ -59,6 +59,7 @@ fun main(args: Array<String>) {
         val dark = when(theme) { ThemePreference.SYSTEM -> isSystemInDarkTheme(); ThemePreference.LIGHT -> false; ThemePreference.DARK -> true }
         WFToolsTheme(dark) {
             if (app.launcher) LauncherWindow(app, windowPreference, theme, { theme = it }, onExit = { if (app.documents.isEmpty()) exitApplication() else app.launcher = false })
+            if (app.marketOpen) MarketWindow(app, onClose = { app.marketOpen = false })
             app.documents.forEach { doc -> key(doc.windowId) {
                 EditorWindow(app, doc, windowPreference, panels, theme, { theme = it }, { panels = it }, { windowPreference = it })
             } }
@@ -108,7 +109,27 @@ private fun clampedSize(preference: WindowPreferences): DpSize {
         Surface(Modifier.fillMaxSize().onPreviewKeyEvent { event ->
             if(event.type == KeyEventType.KeyDown && event.isCtrlPressed && event.key == Key.O) { open(); true }
             else if(event.type == KeyEventType.KeyDown && event.isCtrlPressed && event.key == Key.N) { app.newDocument(); true } else false
-        }) { HomeContent(app,open,{ app.newDocument() },Modifier.fillMaxSize(),theme,onTheme) }
+        }) { HomeContent(app,open,{ app.newDocument() },Modifier.fillMaxSize(),theme,onTheme,onMarket={ app.marketOpen = true }) }
+    }
+}
+
+/**
+ * The market lives in its own window: it is not tied to a document, and downloads land in the
+ * app data directory until the user chooses to open or save them somewhere.
+ */
+@Composable private fun MarketWindow(app: EditorApplicationModel, onClose: () -> Unit) {
+    Window(onCloseRequest = onClose, title = "表盘市场 — WFTools-PC", state = rememberWindowState(size = DpSize(1080.dp, 760.dp))) {
+        val dark = MaterialTheme.colorScheme.surface.luminance() < .5f
+        LaunchedEffect(window, dark) { applyWindowChrome(window, dark) }
+        Surface(Modifier.fillMaxSize()) {
+            com.ailife.wftools.pc.market.WatchMarketWindow(
+                api = app.marketApi,
+                downloadRoot = app.marketDownloadRoot,
+                onOpenWatch = { path -> app.open(listOf(path)) },
+                onClose = onClose,
+                onError = { app.error = it },
+            )
+        }
     }
 }
 @Composable private fun EditorWindow(app: EditorApplicationModel, doc: DocumentController, preference: WindowPreferences,

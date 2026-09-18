@@ -29,9 +29,27 @@ class DesktopWatchAgentToolHost(
     override fun inspectFace(request: WatchAgentInspectFaceRequest): WatchAgentInspectFaceResult = doc.withAgentSession {
         checkRevision(request.expectedRevision)
         val project = doc.session.toWatchProject()
-        WatchAgentInspectFaceResult(currentRevision, project.title, "WatchMaker", doc.session.layers.map { layer ->
-            WatchAgentLayerSummary(layer.id, layer.id, layer.type, attributes = layer.attrs)
-        }, listAssets(), project.globalScript.isNotBlank(), preview != null, buildSet { add("document"); add("validation"); if (preview != null) add("native_preview") })
+        val xmlInspection = WatchAgentXmlInspector.inspect(doc.session.agentCandidate().watchXml)
+        val parsedCount = doc.session.layers.size
+        WatchAgentInspectFaceResult(
+            revision = currentRevision,
+            name = project.title,
+            format = "WatchMaker",
+            layers = doc.session.layers.map { layer ->
+                WatchAgentLayerSummary(layer.id, layer.id, layer.type, attributes = layer.attrs)
+            },
+            layersParsed = parsedCount,
+            layersInXml = xmlInspection.layersInXml,
+            parseStatus = if (parsedCount == xmlInspection.layersInXml) "ok" else "mismatch",
+            assets = listAssets(),
+            hasGlobalScript = project.globalScript.isNotBlank(),
+            previewAvailable = preview != null,
+            capabilities = buildSet {
+                add("document")
+                add("validation")
+                if (preview != null) add("native_preview")
+            },
+        )
     }
     override fun readDocument(request: WatchAgentReadDocumentRequest): WatchAgentDocumentResult = doc.withAgentSession {
         checkRevision(request.expectedRevision)
@@ -43,12 +61,26 @@ class DesktopWatchAgentToolHost(
         checkRevision(request.expectedRevision)
         val candidate = doc.session.agentCandidate()
         val diagnostics = mutableListOf<WatchAgentDiagnostic>()
-        runCatching { validateXml(candidate.watchXml) }.onFailure { diagnostics += WatchAgentDiagnostic(WatchAgentDiagnosticSeverity.ERROR, "invalid_xml", it.message ?: "watch.xml 无法解析") }
+        runCatching { validateXml(candidate.watchXml) }.onSuccess {
+            val inspection = WatchAgentXmlInspector.inspect(candidate.watchXml)
+            val parsedCount = doc.session.layers.size
+            if (inspection.layersInXml != parsedCount) diagnostics += WatchAgentDiagnostic(
+                WatchAgentDiagnosticSeverity.ERROR,
+                "layer_parse_mismatch",
+                "XML 中发现 ${inspection.layersInXml} 个图层节点，但宿主只解析出 ${parsedCount} 个；支持的图层元素应为 Layer(type=...)。",
+            )
+        }.onFailure { diagnostics += WatchAgentDiagnostic(WatchAgentDiagnosticSeverity.ERROR, "invalid_xml", it.message ?: "watch.xml 无法解析") }
         val scriptError = runCatching { validateAgentGlobalScript(candidate.globalScript) }.getOrElse { it.message ?: "脚本无法执行" }
         if (scriptError != null) diagnostics += WatchAgentDiagnostic(WatchAgentDiagnosticSeverity.ERROR, "invalid_global_script", scriptError)
         WatchAgentValidationResult(currentRevision, diagnostics)
     }
-    override fun previewFace(request: WatchAgentPreviewRequest): WatchAgentPreviewResult = preview?.invoke(request) ?: WatchAgentPreviewResult(currentRevision, request.target, "desktop", available = false)
+    override fun previewFace(request: WatchAgentPreviewRequest): WatchAgentPreviewResult = preview?.invoke(request) ?: WatchAgentPreviewResult(
+        currentRevision,
+        request.target,
+        "desktop",
+        available = false,
+        rendererWarning = "renderer_unavailable",
+    )
     override fun editDocument(request: WatchAgentEditDocumentRequest): WatchAgentDocumentMutationResult {
         val candidate = doc.withAgentSession { doc.session.editAgentDocument(request.path.wirePath, request.oldText, request.newText, request.expectedRevision) }
         doc.refreshFromAgent()

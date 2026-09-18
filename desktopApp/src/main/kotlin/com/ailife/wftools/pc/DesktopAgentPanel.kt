@@ -783,7 +783,15 @@ internal class DesktopAgentViewModel(private val app: EditorApplicationModel, pr
                     results.forEach { result ->
                         val summary = when (val content = result.content) {
                             is WatchAgentValidationResult -> if (content.valid) "校验通过 · revision ${result.revision}" else content.diagnostics.joinToString("\n") { "${it.code}：${it.message}" }
-                            is WatchAgentPreviewResult -> if (content.available) "本机表盘预览已生成 · revision ${result.revision}" else "本机预览不可用"
+                            is WatchAgentPreviewResult -> buildList {
+                                add(if (content.available) "本机表盘预览已生成" else "本机预览不可用")
+                                content.renderedLayerCount?.let { add("实际图层 $it") }
+                                content.nonBackgroundPixelRatio?.let {
+                                    add("非背景 ${(it.coerceIn(0.0, 1.0) * 100).toInt()}%")
+                                }
+                                content.rendererWarning?.let { add("警告：$it") }
+                                add("revision ${result.revision}")
+                            }.joinToString(" · ")
                             else -> if (result.succeeded) "已完成 · revision ${result.revision}" else "失败：${result.error?.message}"
                         }
                         val attachment = runCatching { when (val content = result.content) {

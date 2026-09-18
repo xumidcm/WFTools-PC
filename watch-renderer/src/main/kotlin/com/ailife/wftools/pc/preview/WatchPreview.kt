@@ -33,6 +33,8 @@ import androidx.compose.ui.unit.dp
 import com.ailife.wftools.pc.core.DocumentSession
 import com.ailife.wftools.pc.core.EditorLayer
 import com.ailife.wftools.pc.core.LayerSelection
+import com.ailife.wftools.pc.input.TouchTargets
+import com.ailife.wftools.pc.input.isTouchOnly
 import com.ailife.wftools.pc.render.RenderSession
 import com.ailife.wftools2.domain.editor.watchmaker.*
 import com.ailife.wftools2.ui.editor.components.wmDisplayVisible
@@ -40,6 +42,7 @@ import com.ailife.wftools2.ui.editor.components.wmLayerBounds
 import java.awt.geom.AffineTransform
 import java.awt.geom.Point2D
 import java.awt.Cursor
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.*
 
 data class PreviewDropGeometry(
@@ -266,7 +269,7 @@ fun WatchPreview(
         return handles.map { kind ->
             val point = currentWork.toWorkspace(viewport.designToDevice(selectionFrame.handle(kind,offset)))
             kind to hypot(point.x-position.x,point.y-position.y)
-        }.minByOrNull { it.second }?.takeIf { it.second <= 12.0*density }?.first
+        }.minByOrNull { it.second }?.takeIf { it.second <= transformHandleHitRadiusDp(touch = false) * density }?.first
     }
     val hoverCursor = remember(hoveredHandle,middlePan,pointerPanActive,spaceDown) { PointerIcon(Cursor(when {
         middlePan != null || pointerPanActive || spaceDown -> Cursor.MOVE_CURSOR
@@ -315,6 +318,19 @@ fun WatchPreview(
         }.getOrDefault(false)
     }
 
+    /**
+     * 触摸长按呼出菜单时的命中：先在落点取样，再在容差内取邻近取样点。
+     * 手指比鼠标粗，只有一两像素高的细图层否则点得到却选不中。
+     */
+    fun touchMenuHitId(position: Offset): String? {
+        val slopPx = contextMenuHitSlopDp(touch = true) * density
+        return contextMenuHitProbes(slopPx).firstNotNullOfOrNull { probe ->
+            val devicePoint = currentWork.toDevice(Point(position.x + probe.x, position.y + probe.y))
+            if (!viewport.containsDevice(devicePoint, device, round)) null
+            else hit(viewport.deviceToDesign(devicePoint))?.let { currentLayers[it].id }
+        }
+    }
+
     Box(
         modifier.clipToBounds().background(Color(0xff24212a))
             .onSizeChanged { size = it }
@@ -360,7 +376,7 @@ fun WatchPreview(
                         panX = pan.workspace.panX + change.position.x - pan.start.x,
                         panY = pan.workspace.panY + change.position.y - pan.start.y))
                     change.consume()
-                } else change?.let { hoveredHandle = handleAt(it.position) }
+                } else if (change != null && !event.isTouchOnly()) hoveredHandle = handleAt(change.position)
             }
             .onPointerEvent(PointerEventType.Release,PointerEventPass.Initial) { event ->
                 val secondaryPan=rightPan
@@ -442,6 +458,11 @@ fun WatchPreview(
                         // awaitFirstDown does not reliably expose them as a pressed change on Windows.
                         if (downButtons.isTertiaryPressed || downButtons.isSecondaryPressed) return@awaitEachGesture
                         gestureActive = true
+                        // 触屏没有右键、中键，也没有悬停：长按既负责呼出上下文菜单，也是画布平移的起点。
+                        // 桌面 Compose 的多指支持参差，这里只用单指长按，任何触摸设备都能用。
+                        val touch = currentEvent.isTouchOnly()
+                        val touchHoldSlop = touchHoldSlopDp(touch) * density
+                        val downAt = System.currentTimeMillis()
                         val ctrlAtDown = currentEvent.keyboardModifiers.isCtrlPressed
                         val shiftAtDown = currentEvent.keyboardModifiers.isShiftPressed
                         val ctrlPanCandidate = ctrlAtDown && downButtons.isPrimaryPressed && !spaceDown
@@ -469,18 +490,22 @@ fun WatchPreview(
                             handles.map { kind ->
                                 val point = initialWork.toWorkspace(viewport.designToDevice(initialFrame.handle(kind, rotateOffset)))
                                 kind to hypot(point.x - down.position.x, point.y - down.position.y)
-                            }.minByOrNull { it.second }?.takeIf { it.second <= 10.0 * density }?.first
+                            }.minByOrNull { it.second }?.takeIf { it.second <= transformHandleHitRadiusDp(touch) * density }?.first
                         } else null
 
-                        if (handle == null && !hardPan && !ctrlPanCandidate && !render.interactionMode && currentMode == CanvasOperationMode.DIRECT_DRAG && hitId != null) {
+                        // Ctrl/Shift always edit the selection up front; an empty selection lets
+                        // direct drag adopt the pressed layer. An existing plain selection keeps
+                        // ownership so a press on a higher layer cannot steal the drag.
+                        val selectionEditedOnPress = ctrlAtDown || shiftAtDown || canvasPressAdoptsHit(currentMode, initialSelection.selected)
+                        if (handle == null && !hardPan && !ctrlPanCandidate && !render.interactionMode && selectionEditedOnPress && hitId != null) {
                             if (expectedSelection != initialSelection) command { select(hitId, order, ctrlAtDown, shiftAtDown) }
                         }
 
+                        val gestureSelection = if (selectionEditedOnPress) expectedSelection?.selected ?: initialSelection.selected else initialSelection.selected
                         val targetIds = when {
                             hardPan || ctrlPanCandidate || render.interactionMode -> emptySet()
                             handle != null -> initialSelection.selected
-                            currentMode == CanvasOperationMode.DIRECT_DRAG -> canvasDragTargets(currentMode, hitId, expectedSelection?.selected ?: initialSelection.selected)
-                            else -> canvasDragTargets(currentMode, hitId, initialSelection.selected)
+                            else -> canvasDragTargets(currentMode, hitId, gestureSelection)
                         }
                         val originals = currentProject.wmLayers.mapIndexedNotNull { i, layer -> currentLayers[i].id.takeIf { it in targetIds }?.let { it to layer } }
                         val gestureFrame = selectedFrame(targetIds, currentProject, currentLayers, render.frame, document.workDir.toFile())
@@ -491,12 +516,47 @@ fun WatchPreview(
                         var moved = false
                         var panning = hardPan
                         var finalUpdates = emptyMap<String, Map<String, String>>()
+                        // 触摸长按：成立后这一手势变成画布平移；抬手时若手指没有再移动，就呼出上下文菜单。
+                        var touchHoldArmed = touch
+                        var touchHold = false
+                        var touchHoldMoved = false
+                        var holdMovement = 0f
+                        var lastPosition = down.position
+                        var panFrom = down.position
 
                         while (true) {
-                            val event = awaitPointerEvent()
+                            if (touchHoldArmed && !touchHold) {
+                                when (touchHoldIntent(System.currentTimeMillis() - downAt, holdMovement, touchHoldSlop)) {
+                                    TouchGestureIntent.CONTEXT_MENU -> {
+                                        // 长按成立：按住期间的细微抖动不算编辑，清掉它可能留下的临时帧。
+                                        touchHold = true
+                                        panning = true
+                                        panFrom = lastPosition
+                                        liveEdit = LiveEditHandoff()
+                                    }
+                                    TouchGestureIntent.MOVE -> touchHoldArmed = false
+                                    else -> Unit
+                                }
+                            }
+                            // 手指静止时不会有 Move 事件，长按只能由时间驱动。
+                            val event = if (touchHoldArmed && !touchHold) {
+                                val remaining = (TouchTargets.LONG_PRESS_MILLIS - (System.currentTimeMillis() - downAt)).coerceAtLeast(1L)
+                                withTimeoutOrNull(remaining) { awaitPointerEvent() }
+                            } else awaitPointerEvent()
+                            if (event == null) continue
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            lastPosition = change.position
+                            holdMovement = (change.position - down.position).getDistance()
                             if (!change.pressed) {
-                                if (!render.interactionMode && moved && !panning && finalUpdates.isNotEmpty()) {
+                                if (touchHold && !touchHoldMoved) {
+                                    // 触屏没有右键：长按不动是上下文菜单的唯一入口，复用右键菜单回调。
+                                    val target = touchMenuHitId(down.position)
+                                    if (!render.interactionMode && target != null && target !in initialSelection.selected) command { select(target, order) }
+                                    openContextMenu(down.position)
+                                    lastTapAt = 0L
+                                    lastTapId = null
+                                    liveEdit = LiveEditHandoff()
+                                } else if (!render.interactionMode && moved && !panning && finalUpdates.isNotEmpty()) {
                                     liveEdit = LiveEditHandoff().update(finalUpdates)
                                     commit(finalUpdates)
                                 } else {
@@ -504,9 +564,13 @@ fun WatchPreview(
                                     if (!moved && !render.interactionMode && handle == null && !panning) {
                                         val now = System.currentTimeMillis()
                                         val tappedId = hitId
-                                        val doubleTap = tappedId != null && tappedId == lastTapId && now - lastTapAt in 1..450 &&
-                                            (lastTapPosition - down.position).getDistance() <= 12.0 * density
-                                        if (doubleTap && currentLayers.firstOrNull { it.id == tappedId }?.type in setOf("text", "text_curved")) {
+                                        val doubleTap = isTextEditDoubleTap(
+                                            sameTarget = tappedId != null && tappedId == lastTapId,
+                                            elapsedMillis = now - lastTapAt,
+                                            movementPx = (lastTapPosition - down.position).getDistance(),
+                                            movementSlopPx = doubleTapSlopDp(touch) * density,
+                                        )
+                                        if (doubleTap && tappedId != null && currentLayers.firstOrNull { it.id == tappedId }?.type in setOf("text", "text_curved")) {
                                             onTextEdit(tappedId,down.position)
                                             lastTapAt = 0L
                                             lastTapId = null
@@ -517,7 +581,11 @@ fun WatchPreview(
                                         }
                                         when {
                                             ctrlPanCandidate && hitId != null -> command { select(hitId, order, ctrl = true, shift = shiftAtDown) }
-                                            currentMode == CanvasOperationMode.SELECT_THEN_DRAG && hitId != null && hitId !in initialSelection.selected -> command { select(hitId, order, ctrlAtDown, shiftAtDown) }
+                                            // A plain click retargets the selection. When the press already
+                                            // adopted the layer (direct drag from an empty selection) or
+                                            // applied ctrl/shift, the selection is settled and must not be
+                                            // recomputed on release.
+                                            !ctrlAtDown && !shiftAtDown && !selectionEditedOnPress && hitId != null && hitId !in initialSelection.selected -> command { select(hitId, order) }
                                             currentMode == CanvasOperationMode.DIRECT_DRAG && hitId != null && !ctrlAtDown && !shiftAtDown && initialSelection.selected.size > 1 && hitId in initialSelection.selected -> command { select(hitId, order) }
                                             currentMode == CanvasOperationMode.DIRECT_DRAG && hitId == null && !ctrlAtDown -> command { clearSelection() }
                                         }
@@ -530,14 +598,16 @@ fun WatchPreview(
                                 }
                                 break
                             }
-                            if ((change.position - down.position).getDistance() < 3 && !moved) continue
+                            if (holdMovement < 3 && !moved) continue
                             moved = true
+                            // 长按成立之后还在移动 = 平移画布，抬手不再弹菜单。
+                            if (touchHold) touchHoldMoved = touchHoldMoved || (change.position - panFrom).getDistance() >= 3.0
                             if (ctrlPanCandidate) panning = true
                             if (panning) {
                                 pointerPanActive = true
                                 updateWorkspace(originalWorkspace.copy(fit = false, zoom = initialWork.scale,
-                                    panX = originalWorkspace.panX + change.position.x - down.position.x,
-                                    panY = originalWorkspace.panY + change.position.y - down.position.y))
+                                    panX = originalWorkspace.panX + change.position.x - panFrom.x,
+                                    panY = originalWorkspace.panY + change.position.y - panFrom.y))
                             } else if (!render.interactionMode && originals.isNotEmpty()) {
                                 val current = viewport.deviceToDesign(initialWork.toDevice(Point(change.position.x.toDouble(), change.position.y.toDouble())))
                                 finalUpdates = if (handle != null && gestureFrame != null) {

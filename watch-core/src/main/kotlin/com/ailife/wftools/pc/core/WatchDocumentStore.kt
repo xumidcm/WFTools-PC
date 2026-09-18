@@ -28,7 +28,17 @@ class WatchDocumentStore(val workspaceRoot: Path = defaultWorkspace()) {
     private val snapshotGson = GsonBuilder().disableHtmlEscaping().create()
     init { ensurePrivateDirectory(workspaceRoot) }
 
-    fun open(path: Path): DocumentSession {
+    /**
+     * Opens a watch archive.
+     *
+     * [allowProtected] decrypts a protected archive (`watch.pxml` plus `.ppng`/`.pjpg` image twins)
+     * into an ordinary editable document. Without it such archives are refused, as before.
+     *
+     * The session's base archive (`original.zip`) is rewritten to the plain equivalent, so both
+     * extraction and saving treat the document as any other face; a clean save still copies the
+     * untouched protected source byte for byte, because it never goes through that path.
+     */
+    fun open(path: Path, allowProtected: Boolean = false): DocumentSession {
         val source = path.toAbsolutePath().normalize()
         val id = UUID.randomUUID().toString()
         val home = workspaceRoot.resolve(id)
@@ -40,11 +50,24 @@ class WatchDocumentStore(val workspaceRoot: Path = defaultWorkspace()) {
             Files.copy(source, home.resolve("original.zip"))
             if (before != hashFile(source) || before != hashFile(home.resolve("original.zip")))
                 throw WatchDocumentException.ExternalModification()
-            val entry = extract(home.resolve("original.zip"), home.resolve("content"))
+            val base = home.resolve("original.zip")
+            var decryptedProtected = false
+            if (allowProtected && ProtectedWatchArchive.hasProtection(base)) {
+                // 解不开就如实报"受保护"，绝不把占位 watch.xml 当成内容打开。
+                val decrypted = ProtectedWatchArchive.decrypt(base) ?: throw WatchDocumentException.UnsupportedProtection()
+                ProtectedWatchArchive.replaceWithPlain(base, decrypted)
+                decryptedProtected = true
+            }
+            // 解密会把基准归档改写成明文，因此基准哈希必须是改写后的归档，而不是源文件——
+            // 否则保存时的完整性校验会（正确地）认为工作副本已损坏。未解密时沿用已算好的
+            // 源哈希，行为与改造前完全一致（也不再为普通打开多跑一遍哈希）。
+            val baseArchiveHash = if (decryptedProtected) hashFile(base) else before
+            val entry = extract(base, home.resolve("content"))
             val xml = Files.readString(home.resolve("content").resolve(entry), Charsets.UTF_8).removePrefix("\uFEFF")
             val document = WatchXml.parse(xml); WatchXml.validate(document)
             val snapshot = DocumentSnapshot(WatchXml.serialize(document), WatchXml.layers(document).map { UUID.randomUUID().toString() })
-            return DocumentSession(this, id, source, home, entry, before, snapshot).also {
+            return DocumentSession(this, id, source, home, entry, before, snapshot,
+                baseArchiveHash = baseArchiveHash, protectedSource = decryptedProtected).also {
                 it.savedSignature = signature(snapshot)
                 persist(it)
             }
@@ -413,6 +436,10 @@ class WatchDocumentStore(val workspaceRoot: Path = defaultWorkspace()) {
                 zip.comment?.let { out.setComment(it) }
                 zip.entries().asSequence().forEach { entry ->
                     if (entry.name.lowercase(Locale.ROOT) in removed) return@forEach
+                    // 纵深防御：解密后的基准归档已是明文，正常不会再出现这些条目。若将来某条
+                    // 路径漏掉了明文改写，这里也必须拦住，否则会写出 watch.pxml 与 watch.xml
+                    // 自相矛盾的混合归档。
+                    if (session.protectedSource && ProtectedWatchArchive.isProtectedOnlyEntry(entry.name)) return@forEach
                     val copy = ZipEntry(entry.name).apply { time = entry.time; comment = entry.comment; extra = entry.extra }
                     out.putNextEntry(copy)
                     if (entry.name == session.xmlEntry) out.write(session.state.xml.toByteArray(Charsets.UTF_8))

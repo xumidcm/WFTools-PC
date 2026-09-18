@@ -52,6 +52,12 @@ data class WatchAgentInspectFaceResult(
     val name: String? = null,
     val format: String? = null,
     val layers: List<WatchAgentLayerSummary> = emptyList(),
+    /** Number of layer elements understood by the host parser. */
+    val layersParsed: Int = layers.size,
+    /** Number of layer-looking elements found directly in the XML. */
+    val layersInXml: Int = layers.size,
+    /** `ok` when parser and XML agree, `mismatch` when the host ignored nodes. */
+    val parseStatus: String = if (layersParsed == layersInXml) "ok" else "mismatch",
     val assets: List<WatchAgentAssetSummary> = emptyList(),
     val hasGlobalScript: Boolean = false,
     val previewAvailable: Boolean = false,
@@ -101,6 +107,12 @@ data class WatchAgentPreviewResult(
     val available: Boolean = true,
     val imageBytes: ByteArray? = null,
     val diagnostics: List<WatchAgentDiagnostic> = emptyList(),
+    /** Number of layers the renderer submitted for this frame, when known. */
+    val renderedLayerCount: Int? = null,
+    /** Ratio of pixels that differ from the dominant background colour, 0..1. */
+    val nonBackgroundPixelRatio: Double? = null,
+    /** Short machine-readable warning for blank/stale renderer output. */
+    val rendererWarning: String? = null,
 )
 
 data class WatchAgentDocumentMutationResult(

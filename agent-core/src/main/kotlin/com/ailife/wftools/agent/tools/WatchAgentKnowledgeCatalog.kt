@@ -25,7 +25,12 @@ object WatchAgentKnowledgeCatalog {
         ),
         WatchAgentKnowledgeEntry(
             title = "V1 与 Studio V2",
-            text = "常规设计坐标为 512×512，x 向右、y 向下，文档顺序由底到顶。build_source=studio 等信号才表示 V2；保留 id、parentId 和 Ambient 结构，不要擅自升级 V1。",
+            text = "常规设计坐标为 512×512，原点在画布中心 (256,256)，x 向右、y 向下，文档顺序由底到顶。x/y 是相对中心的偏移，不是左上角绝对坐标。build_source=studio 等信号才表示 V2；保留 id、parentId 和 Ambient 结构，不要擅自升级 V1。",
+            source = "watchmaker-format",
+        ),
+        WatchAgentKnowledgeEntry(
+            title = "最小可渲染 watch.xml 模板",
+            text = "最小可渲染模板：<Watch width=\"512\" height=\"512\"><Layers><Layer type=\"image\" path=\"bg.png\"/><Layer type=\"text\" text=\"12:34\" t_font=\"sans\" t_size=\"48\" t_color=\"FFFFFF\"/><Layer type=\"shape\" color=\"00FF00\" width=\"80\" height=\"20\"/></Layers></Watch>。元素名必须是 Layer，type 可为 image、text、shape；图片放 images/bg.png。设计坐标原点为 (256,256)，x 向右、y 向下。",
             source = "watchmaker-format",
         ),
     )

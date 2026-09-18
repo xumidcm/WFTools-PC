@@ -23,6 +23,37 @@ fun nativeDialogIconImages(owner:Component?):List<Image> {
     return listOfNotNull(runCatching{ImageIO.read(resource)}.getOrNull())
 }
 
+/** One entry in a native dialog's file-type dropdown. */
+data class FileDialogFilter(val label:String,val pattern:String)
+
+/**
+ * Turns a comma-separated extension list into native dialog filters.
+ *
+ * Windows shows these as the dialog's file-type dropdown, so each label reads as a filter
+ * rather than repeating the dialog title. An absent or empty list asks for everything.
+ */
+fun fileDialogFilters(extensions:String?,description:String):List<FileDialogFilter> {
+    val patterns=extensions?.split(',')?.map(String::trim)?.filter(String::isNotEmpty).orEmpty()
+    val everything=FileDialogFilter("所有文件 (*.*)","*.*")
+    if(patterns.isEmpty())return listOf(everything)
+    // Patterns are canonical lower case so "PNG" and "png" produce the same filter text.
+    fun glob(extension:String)="*."+extension.removePrefix("*.").removePrefix(".").lowercase()
+    fun join(values:List<String>)=values.joinToString(";"){glob(it)}
+    val knownGroups=listOf(
+        "图片" to listOf("png","jpg","jpeg","gif","webp","bmp"),
+        "视频" to listOf("mp4","webm","mov","m4v","avi","mkv"),
+        "字体" to listOf("ttf","otf","fnt"),
+        "音频" to listOf("mp3","wav","ogg","m4a","aac","flac"),
+    )
+    val named=description.takeIf(String::isNotBlank)?.let{FileDialogFilter("$it (${patterns.joinToString(", "){glob(it)}})",join(patterns))}
+    val grouped=knownGroups.mapNotNull { (label,known) ->
+        val matched=patterns.filter{it.lowercase() in known}
+        matched.takeIf(List<String>::isNotEmpty)?.let{FileDialogFilter("$label (${it.joinToString(", "){glob(it)}})",join(it))}
+    }
+    val head=if(patterns.size==1)listOfNotNull(named)else listOf(FileDialogFilter("所有支持的文件",join(patterns)))+grouped+listOfNotNull(named)
+    return (head+everything).distinctBy(FileDialogFilter::pattern)
+}
+
 private fun nativeFileDialog(owner: Component?, title: String, mode: Int): FileDialog {
     val parent = SwingUtilities.getWindowAncestor(owner)
     return (when (parent) {
@@ -33,6 +64,13 @@ private fun nativeFileDialog(owner: Component?, title: String, mode: Int): FileD
 }
 
 private fun chooseOpenWithNativeDialog(owner: Component?, title: String, extensions: String? = null): List<Path> {
+    // The modern shell dialog honours file-type filters and inherits the app icon; the legacy
+    // AWT dialog does neither on Windows, so prefer the former and fall back when unavailable.
+    val modern = WindowsCommonDialog.show(
+        owner, title, fileDialogFilters(extensions, title), multiple = true,
+    )
+    if (modern != null) return modern
+    logModernDialogFallback(title)
     val dialog = nativeFileDialog(owner, title, FileDialog.LOAD).apply {
         isMultipleMode = true
         filenameFilter = extensions?.takeIf(String::isNotBlank)?.let { allowed ->
@@ -48,9 +86,22 @@ fun chooseAudioFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog
 fun chooseAgentFiles(owner: Component?): List<Path> = chooseOpenWithNativeDialog(owner, "添加 Agent 附件")
 fun chooseAgentImages(owner: Component?): List<Path> = chooseAgentFiles(owner)
 fun chooseSavePath(owner: Component?, source: Path?, title: String, allowExisting: Boolean = true): Path? {
+    val safeName = title.replace(Regex("[<>:\"/\\\\|?*]"), "_")
+    val suggested = source?.fileName?.toString() ?: "$safeName.watch"
+    // The save dialog asks about overwriting on its own, so no extra confirmation here.
+    val modern = WindowsCommonDialog.show(
+        owner,
+        DesktopI18n.text(if (allowExisting) "保存 WatchMaker 表盘" else "导出受保护表盘"),
+        fileDialogFilters("watch", "WatchMaker 表盘"),
+        defaultName = suggested,
+        defaultExtension = "watch",
+        save = true,
+    )
+    if (modern != null) return modern.firstOrNull()
+    logModernDialogFallback(title)
     val dialog = nativeFileDialog(owner, DesktopI18n.text("保存 WatchMaker 表盘"), FileDialog.SAVE).apply {
         filenameFilter = FilenameFilter { _, name -> name.endsWith(".watch", true) }
-        file = source?.fileName?.toString() ?: title.replace(Regex("[<>:\"/\\\\|?*]"), "_") + ".watch"
+        file = suggested
     }
     dialog.isVisible = true
     val selected = dialog.file ?: return null
@@ -60,9 +111,20 @@ fun chooseSavePath(owner: Component?, source: Path?, title: String, allowExistin
     return file.toPath()
 }
 fun chooseCapturePath(owner: Component?, title: String, extension: String, description: String): Path? {
+    val suggested = title.replace(Regex("[<>:\"/\\\\|?*]"), "_") + "." + extension
+    val modern = WindowsCommonDialog.show(
+        owner,
+        DesktopI18n.text(description),
+        fileDialogFilters(extension, DesktopI18n.text(description)),
+        defaultName = suggested,
+        defaultExtension = extension,
+        save = true,
+    )
+    if (modern != null) return modern.firstOrNull()
+    logModernDialogFallback(description)
     val dialog = nativeFileDialog(owner, DesktopI18n.text(description), FileDialog.SAVE).apply {
         filenameFilter = FilenameFilter { _, name -> name.endsWith(".$extension", true) }
-        file = title.replace(Regex("[<>:\"/\\\\|?*]"), "_") + "." + extension
+        file = suggested
     }
     dialog.isVisible = true
     val selected = dialog.file ?: return null
@@ -70,6 +132,16 @@ fun chooseCapturePath(owner: Component?, title: String, extension: String, descr
     val file = if (selected.endsWith(".$extension", true)) java.io.File(parent, selected) else java.io.File(parent, selected + ".$extension")
     if (file.exists() && JOptionPane.showConfirmDialog(owner, DesktopI18n.text("“${file.name}”已存在，要替换它吗？"), DesktopI18n.text("确认保存"), JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.YES_OPTION) return null
     return file.toPath()
+}
+
+private fun logModernDialogFallback(title: String) {
+    if (!WindowsCommonDialog.usable) return
+    System.getLogger("com.ailife.wftools.pc.platform.DesktopFiles").log(
+        System.Logger.Level.WARNING,
+        "Windows common dialog unavailable for {0}; falling back to AWT. reason={1}",
+        title,
+        WindowsCommonDialog.lastFailure ?: "unknown",
+    )
 }
 
 /**

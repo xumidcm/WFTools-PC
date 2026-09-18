@@ -44,8 +44,10 @@ class HomeAndAssetsTest {
         compose.onNodeWithText("继续上次的会话").assertExists()
         compose.onNodeWithText("恢复未保存的草稿").assertDoesNotExist()
         val settings = compose.onNodeWithTag("home-settings").getUnclippedBoundsInRoot()
+        val profile = compose.onNodeWithTag("developer-profile-link").getUnclippedBoundsInRoot()
         val upstream = compose.onNodeWithTag("upstream-attribution",useUnmergedTree=true).getUnclippedBoundsInRoot()
         assertTrue("设置应固定放在上游链接上方",settings.bottom <= upstream.top)
+        assertTrue("开发者点击区只能覆盖头像和左侧文字",profile.right <= upstream.left)
         compose.onNodeWithTag("continue-session").performClick()
         compose.waitUntil(5000){model.documents.size==1&&model.status==null}
         assertEquals(source.toAbsolutePath(),model.documents.single().view.source)
@@ -119,9 +121,20 @@ class HomeAndAssetsTest {
         compose.onNodeWithTag("home-automatic-snapping-toggle").assertExists().performClick()
         compose.onNodeWithTag("home-transform-handles-toggle").assertExists()
         compose.onNodeWithTag("home-operation-status-toggle").assertExists()
-        compose.onNodeWithText("先选后拖模式没有选择元素时，左键拖动表盘。",substring=true).assertExists()
+        compose.onNodeWithText("侧边栏选中的图层优先",substring=true).assertExists()
         compose.onNodeWithText("空格 + 左键",substring=true).assertExists()
         compose.runOnIdle{assertFalse(model.canvasInput.rightButtonPan);assertFalse(model.canvasInput.snapping);assertTrue(model.canvasInput.middleButtonPan)}
+    }
+
+    @Test fun `home offers a market entry that opens the store window or the web app`() {
+        val model=EditorApplicationModel(scope,EditorPreferences(temp.newFolder("market-prefs").toPath()),WatchDocumentStore(temp.newFolder("market-work").toPath())).also{app=it}
+        var marketOpened=false
+        val opened=mutableListOf<String>()
+        compose.setContent{WFToolsTheme(false){Surface(Modifier.fillMaxSize()){HomeContent(model,{}, {},Modifier.fillMaxSize(),openExternal={opened+=it},onMarket={marketOpened=true})}}}
+        compose.onNodeWithTag("home-watch-market").assertExists().performClick()
+        compose.runOnIdle{assertTrue("点击卡片应打开市场窗口",marketOpened)}
+        compose.onNodeWithTag("home-market-web").performClick()
+        compose.runOnIdle{assertEquals(listOf(WatchMarket.HOME_URL),opened)}
     }
 
     @Test fun `home keeps header and footer fixed while only the recent list scrolls`() {

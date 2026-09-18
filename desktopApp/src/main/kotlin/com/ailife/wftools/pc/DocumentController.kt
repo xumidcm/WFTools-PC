@@ -11,6 +11,7 @@ import com.ailife.wftools.agent.storage.AgentConversationRepository
 import com.ailife.wftools.agent.storage.AgentProviderStore
 import com.ailife.wftools.agent.workspace.WorkspaceManager
 import com.ailife.wftools.pc.platform.appData
+import com.ailife.wftools.pc.platform.knownDownloadsDirectory
 import com.ailife.wftools2.domain.editor.watchmaker.WmScriptRuntime
 import com.ailife.wftools2.domain.editor.watchmaker.WmTagsData
 import com.ailife.wftools2.domain.editor.watchmaker.WmWatchfaceProject
@@ -303,7 +304,7 @@ class DocumentController private constructor(
             finally { pending--; blocking--; status = null }
         }
     }
-    fun reload(preferences: EditorPreferences, onReloaded: (DocumentController) -> Unit) {
+    fun reload(preferences: EditorPreferences, allowProtected: Boolean = false, onReloaded: (DocumentController) -> Unit) {
         val source = view.source ?: return
         if(busy || closed) return
         pending++; blocking++; status = "正在重新加载原文件…"; externalModification = false; error = null
@@ -311,7 +312,7 @@ class DocumentController private constructor(
             try {
                 val replacement = mutex.withLock { withContext(Dispatchers.IO) {
                     // Prepare first so a corrupt external replacement does not destroy the open local draft.
-                    val fresh = store.open(source)
+                    val fresh = store.open(source, allowProtected = allowProtected)
                     val next = try { create(fresh,store,scope,preferences) } catch(e: Exception) { runCatching { fresh.close() }; throw e }
                     try { store.discardRecovery(session.id) } catch(e: Exception) { next.render.close(); fresh.close(); throw e }
                     runCatching { session.close() }; runCatching { render.close() }
@@ -351,6 +352,21 @@ class EditorApplicationModel(val scope: CoroutineScope, val preferences: EditorP
     var canvasInput by mutableStateOf(preferences.canvasInput())
     var agentSettings by mutableStateOf(preferences.agentSettings())
         private set
+    var protectedFaces by mutableStateOf(preferences.protectedFaces())
+        private set
+    private val preferencesSaveMutex = Mutex()
+    /** 两级彩蛋的第一级：连点左上角图标；解锁后设置里才会出现受保护表盘开关。 */
+    fun unlockProtectedFaces() {
+        if (protectedFaces.unlocked) return
+        updateProtectedFaces(protectedFaces.copy(unlocked = true))
+    }
+    fun updateProtectedFaces(value: ProtectedFacePreferences) {
+        protectedFaces = value
+        scope.launch { preferencesSaveMutex.withLock { runCatching { withContext(Dispatchers.IO) { preferences.saveProtectedFaces(value) } } } }
+    }
+    /** 市场下载目录：<当前用户下载目录>/wftools；平台报不出下载目录时回退到应用数据目录。 */
+    private fun marketDownloadDirectory(): Path =
+        (knownDownloadsDirectory() ?: appData()).resolve("wftools")
     /** These stores stay lazy so a disabled Agent never creates a backend or touches its files. */
     val agentProviderStore: AgentProviderStore by lazy { AgentProviderStore(agentRoot) }
     val agentConversationRepository: AgentConversationRepository by lazy { AgentConversationRepository(agentRoot) }
@@ -358,6 +374,12 @@ class EditorApplicationModel(val scope: CoroutineScope, val preferences: EditorP
     var recovery by mutableStateOf<List<RecoveryDraft>>(emptyList())
     var launcher by mutableStateOf(true)
     var launcherWindow: Window? = null
+    /** The market window is independent of any document. */
+    var marketOpen by mutableStateOf(false)
+    /** Created on first use so a user who never opens the market pays nothing for it. */
+    val marketApi: com.ailife.wftools.pc.market.WatchMarketApi by lazy { com.ailife.wftools.pc.market.WatchMarketApi() }
+    /** 市场下载落到当前用户的下载目录下的 wftools 文件夹，找不到下载目录时回退到应用数据目录。 */
+    val marketDownloadRoot: Path get() = marketDownloadDirectory()
     var copiedScriptContext: Pair<String,String>? = null
     var recentProjects by mutableStateOf<List<RecentProject>>(emptyList()); private set
     var lastSession by mutableStateOf<List<Path>>(emptyList()); private set
@@ -487,7 +509,7 @@ class EditorApplicationModel(val scope: CoroutineScope, val preferences: EditorP
                         if(recoveryId != null && existing.session.id != recoveryId) failures.add("此草稿的原文件已在另一个窗口打开。请先关闭该窗口，再恢复草稿；草稿仍然保留。")
                     }
                     else {
-                        val session = withContext(Dispatchers.IO) { when { recoveryId != null -> store.recover(recoveryId); path == null -> store.newDocument(DesktopI18n.text("新建表盘")); else -> store.open(path) } }
+                        val session = withContext(Dispatchers.IO) { when { recoveryId != null -> store.recover(recoveryId); path == null -> store.newDocument(DesktopI18n.text("新建表盘")); else -> store.open(path, allowProtected = protectedFaces.effectiveAllowEditing) } }
                         val doc = DocumentController.create(session, store, scope, preferences)
                         documents.add(doc)
                         recordOpened(doc)
@@ -501,7 +523,7 @@ class EditorApplicationModel(val scope: CoroutineScope, val preferences: EditorP
         }
     }
     fun closed(doc: DocumentController) { agentModels.remove(doc.session.id)?.close(); documents.remove(doc); if (documents.isEmpty()) launcher = true; refreshRecovery() }
-    fun reload(doc: DocumentController) = doc.reload(preferences) { replacement ->
+    fun reload(doc: DocumentController) = doc.reload(preferences, protectedFaces.effectiveAllowEditing) { replacement ->
         agentModels.remove(doc.session.id)?.close()
         val index = documents.indexOf(doc)
         if(index >= 0) documents[index] = replacement

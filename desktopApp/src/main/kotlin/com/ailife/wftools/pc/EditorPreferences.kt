@@ -22,6 +22,20 @@ data class CanvasInputPreferences(
     val showOperationStatus:Boolean=true,
 )
 data class RecentProject(val path: String,val title: String,val openedAt: Long,val draftId: String? = null)
+
+/**
+ * 受保护表盘的解锁与编辑开关。
+ *
+ * [unlocked] 由两级彩蛋触发（先连点左上角图标，再连点标题），决定设置里是否出现这一项；
+ * [allowEditing] 才是真正让受保护表盘直接打开编辑的开关。未解锁时 [allowEditing] 一律按
+ * false 处理，即使配置文件被手工改过也不会生效。
+ */
+data class ProtectedFacePreferences(val unlocked: Boolean = false, val allowEditing: Boolean = false) {
+    /** 实际生效的编辑许可：解锁是硬前提。 */
+    val effectiveAllowEditing: Boolean get() = unlocked && allowEditing
+}
+
+
 data class PreviewPreferences(val device: DevicePreviewSettings = DevicePreviewSettings(), val workspace: WorkspaceViewState = WorkspaceViewState(), val simulation: Map<String, String> = emptyMap(), val snapping: Boolean = true,
     val operationMode: CanvasOperationMode = CanvasOperationMode.DIRECT_DRAG, val devicePreviewEnabled: Boolean = false, val showTransformHandles: Boolean = true,
     val showOperationStatus: Boolean = true)
@@ -109,8 +123,22 @@ class EditorPreferences(private val directory: Path = appData().resolve("prefere
             imageGenerationEndpoint = p.getProperty("agent.imageEndpoint")?.takeIf(String::isNotBlank),
             imageModelId = p.getProperty("agent.imageModel")?.takeIf(String::isNotBlank),
             searchEndpoint = p.getProperty("agent.searchEndpoint")?.takeIf(String::isNotBlank),
+            searchMaxResults = SearchResultCount.parse(p.getProperty("agent.searchMaxResults").orEmpty()),
+            searchDepth = SearchDepth.parse(p.getProperty("agent.searchDepth")).wire,
         )
     }
+    fun protectedFaces(): ProtectedFacePreferences = read("application.properties").let { p ->
+        val unlocked = p.getProperty("protectedFaceUnlocked")?.toBooleanStrictOrNull() ?: false
+        ProtectedFacePreferences(
+            unlocked = unlocked,
+            // 未解锁时不允许"编辑受保护表盘"生效，避免手工改配置文件绕过彩蛋门控。
+            allowEditing = unlocked && (p.getProperty("protectedFaceAllowEditing")?.toBooleanStrictOrNull() ?: false),
+        )
+    }
+    @Synchronized fun saveProtectedFaces(value: ProtectedFacePreferences) = write("application.properties", read("application.properties").apply {
+        setProperty("protectedFaceUnlocked", value.unlocked.toString())
+        setProperty("protectedFaceAllowEditing", value.allowEditing.toString())
+    })
     @Synchronized fun saveApplication(theme: ThemePreference, panels: PanelPreferences, window: WindowPreferences) = saveApplication(theme,panels,window,canvasInput())
     @Synchronized fun saveApplication(theme: ThemePreference, panels: PanelPreferences, window: WindowPreferences, canvasInput: CanvasInputPreferences) = write("application.properties", read("application.properties").apply {
         setProperty("theme", theme.name); setProperty("left", panels.left.toString()); setProperty("right", panels.right.toString()); setProperty("bottom", panels.bottom.toString())
@@ -134,6 +162,8 @@ class EditorPreferences(private val directory: Path = appData().resolve("prefere
         optional("agent.imageEndpoint", value.imageGenerationEndpoint)
         optional("agent.imageModel", value.imageModelId)
         optional("agent.searchEndpoint", value.searchEndpoint)
+        current.setProperty("agent.searchMaxResults", SearchResultCount.clamp(value.searchMaxResults).toString())
+        current.setProperty("agent.searchDepth", SearchDepth.parse(value.searchDepth).wire)
         write("application.properties", current)
     }
     fun preview(identity: String): PreviewPreferences {

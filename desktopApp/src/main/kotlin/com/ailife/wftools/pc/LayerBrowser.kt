@@ -23,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import com.ailife.wftools.pc.core.LayerSelection
+import com.ailife.wftools.pc.input.*
 import kotlinx.coroutines.*
 import kotlin.math.*
 
@@ -49,6 +50,10 @@ private fun predictedSelection(current: LayerSelection,id: String,order: List<St
     val visible by rememberUpdatedState(doc.visible)
     val listState = rememberLazyListState(); val focus = remember { FocusRequester() }
     val density by rememberUpdatedState(LocalDensity.current.density)
+    /** 触屏模式：关掉悬停揭示并放大命中区；鼠标（默认）行为完全不变。 */
+    var touchMode by remember { mutableStateOf(false) }
+    /** 滚动条在触屏下加宽便于手指抓取，鼠标沿用原来的 8dp。 */
+    val scrollbarWidth = if(touchMode)splitterThicknessDp(true).dp else 8.dp
     var menu by remember { mutableStateOf<Offset?>(null) }; var filter by remember { mutableStateOf(false) }
     var dragIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var dragPoint by remember { mutableStateOf(Offset.Zero) }; var dragGap by remember { mutableStateOf<Int?>(null) }
@@ -84,6 +89,7 @@ private fun predictedSelection(current: LayerSelection,id: String,order: List<St
                 doc.command { nextVisibleSelection(order,selection.primary,delta)?.let{select(it,order,ctrl,shift)} };true
             }else false }.focusable()
             .onPointerEvent(PointerEventType.Press) { event ->
+                if(event.isFromTouch())touchMode=true
                 if(event.buttons.isSecondaryPressed && !doc.editingBlocked) {
                     val point=event.changes.firstOrNull()?.position ?: return@onPointerEvent
                     if(point.x>listState.layoutInfo.viewportSize.width)return@onPointerEvent
@@ -99,6 +105,7 @@ private fun predictedSelection(current: LayerSelection,id: String,order: List<St
                 awaitEachGesture {
                     val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
                     if(down.position.x > size.width-10*density || doc.editingBlocked)return@awaitEachGesture
+                    if(down.type==PointerType.Touch)touchMode=true
                     val row=listState.layoutInfo.visibleItemsInfo.firstOrNull{down.position.y>=it.offset && down.position.y<it.offset+it.size} ?: return@awaitEachGesture
                     val id=row.key as? String ?: return@awaitEachGesture
                     val order=visible.map{it.id};if(id !in order)return@awaitEachGesture
@@ -107,10 +114,18 @@ private fun predictedSelection(current: LayerSelection,id: String,order: List<St
                     val ctrl=currentEvent.keyboardModifiers.isCtrlPressed;val shift=currentEvent.keyboardModifiers.isShiftPressed
                     val initial=doc.view.selection;val moving=predictedSelection(initial,id,order,ctrl,shift).ifEmpty{setOf(id)}
                     if(id !in initial.selected || ctrl || shift)doc.command{select(id,order,ctrl,shift)}
+                    val longPressSlop=viewConfiguration.touchSlop*2f
+                    val touchPointer=down.type==PointerType.Touch
                     var moved=false
+                    val startedAt=System.currentTimeMillis()
                     try {
                         while(true) {
-                            val event=awaitPointerEvent(PointerEventPass.Initial)
+                            // 只有触摸指针走长按超时；鼠标没有长按语义，按住停顿后仍可继续拖动。
+                            val event=if(touchPointer)withTimeoutOrNull(TouchTargets.LONG_PRESS_MILLIS) { awaitPointerEvent(PointerEventPass.Initial) } else awaitPointerEvent(PointerEventPass.Initial)
+                            if(event==null) {
+                                if(moved)continue
+                                menu=down.position;break
+                            }
                             val change=event.changes.firstOrNull{it.id==down.id} ?: break
                             if(event.type==PointerEventType.Scroll){dragPoint=change.position;continue}
                             if(!change.pressed) {
@@ -121,8 +136,10 @@ private fun predictedSelection(current: LayerSelection,id: String,order: List<St
                                 }else if(!ctrl && !shift && initial.selected.size>1 && id in initial.selected)doc.command{select(id,order)}
                                 break
                             }
-                            if(!moved && (change.position-down.position).getDistance()>viewConfiguration.touchSlop){moved=true;dragIds=moving}
+                            val travel=(change.position-down.position).getDistance()
+                            if(!moved && travel>viewConfiguration.touchSlop){moved=true;dragIds=moving}
                             if(moved){change.consume();dragPoint=change.position;dragGap=gapAt(change.position.y)}
+                            else if(touchPointer && isLongPress(System.currentTimeMillis()-startedAt,travel,longPressSlop)){menu=change.position;break}
                         }
                     }finally{dragIds=emptySet();dragGap=null}
                 }
@@ -135,7 +152,10 @@ private fun predictedSelection(current: LayerSelection,id: String,order: List<St
                         Row(Modifier.fillMaxWidth().height(52.dp).hoverable(interaction).padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
                             LayerThumbnail(doc,layer,38.dp)
                             Column(Modifier.weight(1f)){Text(layer.attrs["name"]?.ifBlank{null} ?: "图层 ${doc.view.layers.indexOfFirst{it.id==layer.id}+1}",fontWeight=FontWeight.SemiBold,fontSize=14.sp,maxLines=1,overflow=TextOverflow.Ellipsis);Text((layerTypes.firstOrNull{it.first==layer.type}?.second ?: layer.type)+(layer.attrs["path"] ?: layer.attrs["text"])?.takeIf{it.isNotBlank()}?.let{" · $it"}.orEmpty(),fontSize=12.sp,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)}
-                            Box(Modifier.size(28.dp)){if(hovered||selected)WmIconButton(Icons.Default.Edit,"编辑图层属性",!doc.editingBlocked,size=28.dp){doc.command{select(layer.id,visible.map{it.id})};doc.requestedInspectorTab="属性"}}
+                            val showEdit=hovered||selected||touchMode
+                            // 触屏没有悬停，编辑入口必须常显；命中区随触屏放大（外层尺寸同步，否则约束会把按钮压回去）。
+                            val editTarget=touchTargetDp(28f,touchMode).dp
+                            Box(Modifier.size(editTarget)){if(showEdit)WmIconButton(Icons.Default.Edit,"编辑图层属性",!doc.editingBlocked,size=editTarget){doc.command{select(layer.id,visible.map{it.id})};doc.requestedInspectorTab="属性"}}
                         }
                     }
                 }
@@ -143,7 +163,7 @@ private fun predictedSelection(current: LayerSelection,id: String,order: List<St
             }
             val markerColor=MaterialTheme.colorScheme.primary
             if(dragGap!=null)Canvas(Modifier.matchParentSize()) { val info=listState.layoutInfo.visibleItemsInfo;val y=info.firstOrNull{it.index==dragGap}?.offset?.toFloat() ?: info.lastOrNull()?.let{(it.offset+it.size).toFloat()} ?: 0f;drawLine(markerColor,Offset(10.dp.toPx(),y),Offset(size.width-20.dp.toPx(),y),2.dp.toPx()) }
-            VerticalScrollbar(rememberScrollbarAdapter(listState),Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical=4.dp).width(8.dp),style=desktopScrollbarStyle())
+            VerticalScrollbar(rememberScrollbarAdapter(listState),Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical=4.dp).width(scrollbarWidth),style=desktopScrollbarStyle())
             Md3LayerMenu(menu,{menu=null},commands)
         }
     }
