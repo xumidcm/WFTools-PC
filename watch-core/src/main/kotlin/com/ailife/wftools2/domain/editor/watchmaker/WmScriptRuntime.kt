@@ -118,7 +118,7 @@ class WmScriptRuntime {
             try {
                 WmLuaEnv.bounded(globals) { cb.invoke(LuaValue.varargsOf(args)) }
             } catch (e: Exception) {
-                lastError = e.message
+                lastError = e.message ?: e.javaClass.name
             }
         }
     }
@@ -137,7 +137,7 @@ class WmScriptRuntime {
             refreshVariables()
             true
         } catch (e: Exception) {
-            lastError = e.message
+            lastError = e.message ?: e.javaClass.name
             false
         }
     }
@@ -183,7 +183,7 @@ class WmScriptRuntime {
         this.tagResolver = tagResolver
         lastError = null
         if (script.isBlank()) return false
-        return runChunk(preprocess(script))
+        return runChunk(preprocess(normalizeWatchMakerAssignments(script)))
     }
 
     /**
@@ -232,7 +232,7 @@ class WmScriptRuntime {
         lastError = null
         if (code.isBlank()) return false
         val body = if (code.startsWith("script:")) code.substring(7) else code
-        return runChunk(preprocess(body))
+        return runChunk(preprocess(normalizeWatchMakerAssignments(body)))
     }
 
     private fun runChunk(src: String): Boolean {
@@ -243,10 +243,297 @@ class WmScriptRuntime {
             refreshVariables()
             true
         } catch (e: Exception) {
-            lastError = e.message
+            lastError = e.message ?: e.javaClass.name
             false
         }
     }
+
+    /**
+     * The bundled taoguan compiler has an RK constant limit of 255 for global
+     * assignment keys, but its fallback path forgets to load the key into the
+     * temporary register. WatchMaker-generated scripts commonly initialize
+     * thousands of globals (including large geometry tables), so rewrite simple
+     * non-local assignment LHS names to explicit `_G["name"]` table accesses.
+     * The table-access code path correctly materializes long string constants and
+     * keeps the script semantics intact. Local declarations are deliberately left
+     * alone.
+     */
+    private fun normalizeWatchMakerAssignments(source: String): String {
+        // Protect Lua long strings/comments before the lightweight assignment
+        // scanner runs. They can legally contain arbitrary `NAME=value` text,
+        // including newlines; treating that text as code changes the literal.
+        val (maskedSource, longRegions) = protectLongLuaRegions(source)
+        // A number of WatchMaker exporters emit `local a=1 b=2` on one line.
+        // Lua treats only `a` as local and the rest as separate global statements;
+        // making each declaration explicit both matches the author's intent and
+        // prevents the taoguan compiler from losing the later values in a large
+        // chunk. Do this before collecting locals so the assignment rewrite below
+        // never turns an intended local into a global table access.
+        val explicitLocals = maskedSource.lineSequence()
+            .map(::expandImplicitLocalChain)
+            .joinToString("\n")
+
+        // Keep assignments to lexical locals untouched. WatchMaker's generated
+        // global tables use upper-case names (VX/FI/IV/AX/AY, ...), while helper
+        // locals are often short upper-case names too (A/B/DR), so the local-name
+        // set is needed to distinguish the two cases without a full Lua AST pass.
+        val localNames = LOCAL_DECLARATION.findAll(explicitLocals)
+            .flatMap { declaration ->
+                declaration.groupValues[1]
+                    .split(',')
+                    .asSequence()
+                    .map(String::trim)
+            }
+            .toSet()
+
+        // Rewrite every matching assignment, not just a whole line. Generated
+        // faces commonly put hundreds of `var_*=` statements on one line; a
+        // line-level regex leaves all but the first key on the buggy constant
+        // path and can still trigger StrongSlot/NPE failures.
+        val rewritten = explicitLocals.lineSequence()
+            .map { line -> rewriteGlobalAssignments(line, localNames) }
+            .joinToString("\n")
+        return longRegions.entries.fold(rewritten) { text, (token, original) -> text.replace(token, original) }
+    }
+
+    /** Replaces Lua [[...]], [=[...]=] strings and long comments with safe tokens. */
+    private fun protectLongLuaRegions(source: String): Pair<String, Map<String, String>> {
+        val regions = LinkedHashMap<String, String>()
+        val masked = StringBuilder(source.length)
+        var codeStart = 0
+        var cursor = 0
+        var tokenIndex = 0
+        while (cursor < source.length) {
+            val c = source[cursor]
+            if (c == '\'' || c == '"') {
+                val quote = c
+                cursor++
+                var escaped = false
+                while (cursor < source.length) {
+                    val next = source[cursor++]
+                    if (escaped) escaped = false
+                    else if (next == '\\') escaped = true
+                    else if (next == quote) break
+                }
+                continue
+            }
+            val isComment = c == '-' && source.getOrNull(cursor + 1) == '-'
+            val opener = longBracketOpener(source, if (isComment) cursor + 2 else cursor)
+            if (opener == null) {
+                cursor++
+                continue
+            }
+            val regionStart = if (isComment) cursor else opener.first
+            val regionEnd = longBracketEnd(source, opener.first, opener.second)
+            var token: String
+            do {
+                token = "__WFTOOLS_LONG_REGION_${tokenIndex++}__"
+            } while (source.contains(token) || regions.containsKey(token))
+            masked.append(source, codeStart, regionStart)
+            masked.append(token)
+            regions[token] = source.substring(regionStart, regionEnd)
+            cursor = regionEnd
+            codeStart = cursor
+        }
+        masked.append(source, codeStart, source.length)
+        return masked.toString() to regions
+    }
+
+    private fun longBracketOpener(source: String, start: Int): Pair<Int, Int>? {
+        if (start < 0 || start >= source.length || source[start] != '[') return null
+        var cursor = start + 1
+        while (cursor < source.length && source[cursor] == '=') cursor++
+        if (cursor >= source.length || source[cursor] != '[') return null
+        return start to (cursor - start - 1)
+    }
+
+    private fun longBracketEnd(source: String, opener: Int, equals: Int): Int {
+        var cursor = opener + equals + 2
+        while (cursor < source.length) {
+            if (source[cursor] == ']') {
+                var close = cursor + 1
+                var matches = true
+                repeat(equals) {
+                    if (close >= source.length || source[close] != '=') matches = false else close++
+                }
+                if (matches && close < source.length && source[close] == ']') return close + 1
+            }
+            cursor++
+        }
+        return source.length
+    }
+
+    /** Expand exporter shorthand such as `local a=1 b=2` to explicit locals. */
+    private fun expandImplicitLocalChain(line: String): String {
+        if (!line.contains("local")) return line
+        val out = StringBuilder(line.length + 16)
+        var inString = '\u0000'
+        var escaped = false
+        var braceDepth = 0
+        var localChain = false
+        var sawLocalAssignment = false
+        var i = 0
+        while (i < line.length) {
+            val c = line[i]
+            val next = line.getOrNull(i + 1)
+            if (inString != '\u0000') {
+                out.append(c)
+                if (escaped) escaped = false
+                else if (c == '\\') escaped = true
+                else if (c == inString) inString = '\u0000'
+                i++
+                continue
+            }
+            if (c == '-' && next == '-') {
+                out.append(line.substring(i))
+                break
+            }
+            when {
+                c == '\'' || c == '"' -> {
+                    inString = c
+                    out.append(c)
+                    i++
+                }
+                c == '{' -> {
+                    braceDepth++
+                    out.append(c)
+                    i++
+                }
+                c == '}' -> {
+                    braceDepth = (braceDepth - 1).coerceAtLeast(0)
+                    out.append(c)
+                    i++
+                }
+                c == ';' -> {
+                    localChain = false
+                    sawLocalAssignment = false
+                    out.append(c)
+                    i++
+                }
+                isIdentifierStart(c) -> {
+                    val start = i
+                    i++
+                    while (i < line.length && isIdentifierPart(line[i])) i++
+                    val word = line.substring(start, i)
+                    if (word == "local") {
+                        localChain = true
+                        sawLocalAssignment = false
+                        out.append(word)
+                        continue
+                    }
+                    if (localChain && braceDepth == 0) {
+                        if (word in LOCAL_CHAIN_STOP_WORDS) {
+                            localChain = false
+                            sawLocalAssignment = false
+                        } else {
+                            val equals = skipWhitespace(line, i)
+                            if (equals < line.length && line[equals] == '=' && line.getOrNull(equals + 1) != '=') {
+                                if (sawLocalAssignment) out.append("; local ")
+                                sawLocalAssignment = true
+                            }
+                        }
+                    }
+                    out.append(word)
+                }
+                else -> {
+                    out.append(c)
+                    i++
+                }
+            }
+        }
+        return out.toString()
+    }
+
+    /** Rewrite global scalar/table assignments while respecting strings/comments/table literals. */
+    private fun rewriteGlobalAssignments(line: String, localNames: Set<String>): String {
+        val out = StringBuilder(line.length + 32)
+        var inString = '\u0000'
+        var escaped = false
+        var braceDepth = 0
+        var i = 0
+        while (i < line.length) {
+            val c = line[i]
+            val next = line.getOrNull(i + 1)
+            if (inString != '\u0000') {
+                out.append(c)
+                if (escaped) escaped = false
+                else if (c == '\\') escaped = true
+                else if (c == inString) inString = '\u0000'
+                i++
+                continue
+            }
+            if (c == '-' && next == '-') {
+                out.append(line.substring(i))
+                break
+            }
+            when {
+                c == '\'' || c == '"' -> {
+                    inString = c
+                    out.append(c)
+                    i++
+                }
+                c == '{' -> {
+                    braceDepth++
+                    out.append(c)
+                    i++
+                }
+                c == '}' -> {
+                    braceDepth = (braceDepth - 1).coerceAtLeast(0)
+                    out.append(c)
+                    i++
+                }
+                braceDepth == 0 && isIdentifierStart(c) && (i == 0 || !isIdentifierPart(line[i - 1]) && line[i - 1] != '.' && line[i - 1] != ':') -> {
+                    val start = i
+                    val names = ArrayList<String>(2)
+                    var cursor = i
+                    while (true) {
+                        if (!isIdentifierStart(line.getOrNull(cursor) ?: break)) break
+                        val nameStart = cursor
+                        cursor++
+                        while (cursor < line.length && isIdentifierPart(line[cursor])) cursor++
+                        names += line.substring(nameStart, cursor)
+                        val comma = skipWhitespace(line, cursor)
+                        if (comma >= line.length || line[comma] != ',') break
+                        val afterComma = skipWhitespace(line, comma + 1)
+                        if (!isIdentifierStart(line.getOrNull(afterComma) ?: break)) break
+                        cursor = afterComma
+                    }
+                    val equals = skipWhitespace(line, cursor)
+                    val isAssignment = equals < line.length && line[equals] == '=' && line.getOrNull(equals + 1) != '='
+                    if (isAssignment) {
+                        val replacements = names.map { name ->
+                            if (name !in localNames && (name.startsWith("var_") || name.firstOrNull()?.isUpperCase() == true)) {
+                                "_G[\"$name\"]"
+                            } else name
+                        }
+                        if (replacements.zip(names).any { (replacement, name) -> replacement != name }) {
+                            out.append(replacements.joinToString(","))
+                            out.append(line.substring(cursor, equals))
+                            i = equals
+                            continue
+                        }
+                    }
+                    out.append(line.substring(start, cursor))
+                    i = cursor
+                }
+                else -> {
+                    out.append(c)
+                    i++
+                }
+            }
+        }
+        return out.toString()
+    }
+
+    private fun skipWhitespace(text: String, from: Int): Int {
+        var index = from
+        while (index < text.length && text[index].isWhitespace()) index++
+        return index
+    }
+
+    private fun isIdentifierStart(c: Char): Boolean = c == '_' || c.isLetter()
+
+    private fun isIdentifierPart(c: Char): Boolean = c == '_' || c.isLetterOrDigit()
 
     // ── Environment ───────────────────────────────────────────────────────────
 
@@ -396,6 +683,8 @@ class WmScriptRuntime {
     }
 
     private companion object {
+        val LOCAL_DECLARATION = Regex("""\blocal\s+(?:function\s+)?([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)""")
+        val LOCAL_CHAIN_STOP_WORDS = setOf("if", "for", "while", "repeat", "return", "do", "end", "elseif", "else", "then", "function", "until", "goto", "break")
         val RESERVED = setOf("_G", "_ENV", "_VERSION", "arg")
         val TAG_NAME = Regex("[A-Za-z_][A-Za-z0-9_]*")
         const val CACHE_MAX = 128

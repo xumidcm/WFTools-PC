@@ -104,6 +104,13 @@ function Copy-PreservedTree([string]$Source, [string]$Destination) {
         $target = Join-Path $Destination (Get-RelativePath $Source $file.FullName)
         [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target))
         [IO.File]::Copy($file.FullName, $target, $true)
+        # Compose's native launcher and a few bundled binaries may carry the
+        # read-only bit from the Gradle image. Clear it on the staged copy so
+        # deterministic timestamp preservation below does not fail on Windows.
+        $targetInfo = Get-Item -LiteralPath $target -Force
+        if ($targetInfo.Attributes -band [IO.FileAttributes]::ReadOnly) {
+            $targetInfo.Attributes = $targetInfo.Attributes -bxor [IO.FileAttributes]::ReadOnly
+        }
         [IO.File]::SetLastWriteTimeUtc($target, $file.LastWriteTimeUtc)
     }
     foreach ($directory in ($directories | Sort-Object { $_.FullName.Length } -Descending)) {
@@ -453,7 +460,10 @@ $stagedZip = Join-Path $stage 'portable.zip'
 $zip = [IO.Compression.ZipFile]::OpenRead($stagedZip)
 try {
     foreach ($required in @(('WFTools-PC/' + $LauncherName), 'WFTools-PC/runtime/bin/server/jvm.dll', 'WFTools-PC/app/resources/vlc/libvlc.dll', 'WFTools-PC/app/resources/vlc/plugins/plugins.dat', 'WFTools-PC/README_WINDOWS.md', 'WFTools-PC/USER_GUIDE.md', 'WFTools-PC/PACKAGE-MANIFEST.json')) {
-        if ($null -eq $zip.GetEntry($required)) { throw "Portable ZIP is missing: $required" }
+        # ZipArchive preserves the host separator on Windows. Compare using a
+        # portable slash so the contract works on both Windows and Linux.
+        $entry = $zip.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq $required } | Select-Object -First 1
+        if ($null -eq $entry) { throw "Portable ZIP is missing: $required" }
     }
 } finally { $zip.Dispose() }
 [IO.File]::Move($stagedZip, $portable)

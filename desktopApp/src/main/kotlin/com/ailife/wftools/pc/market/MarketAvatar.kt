@@ -70,9 +70,15 @@ internal fun MarketAvatar(
     tag: String? = null,
 ) {
     val key = remember(username, avatarUrl, version) { MarketAvatarCache.key(username, avatarUrl, version) }
-    var bitmap by remember(key) { mutableStateOf(MarketAvatarCache.get(key)) }
+    // Keep the previous bitmap while a new URL/version is fetched. This mirrors the mobile
+    // store behaviour and avoids a distracting letter flash after an avatar upload or refresh.
+    var bitmap by remember(username.trim().lowercase()) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(api, key) {
-        if (bitmap != null || username.isBlank()) return@LaunchedEffect
+        if (username.isBlank()) return@LaunchedEffect
+        MarketAvatarCache.get(key)?.let {
+            bitmap = it
+            return@LaunchedEffect
+        }
         val loaded = withContext(Dispatchers.IO) {
             runCatching { api.avatarBytesForUser(username, avatarUrl) }.getOrNull()?.let(::decodeMarketAvatar)
         }

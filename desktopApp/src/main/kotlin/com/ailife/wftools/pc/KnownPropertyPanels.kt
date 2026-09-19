@@ -2,6 +2,8 @@ package com.ailife.wftools.pc
 
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -16,10 +18,16 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.ailife.wftools.pc.platform.chooseAssets
+import com.ailife.wftools2.domain.editor.watchmaker.WmTagsData
 import com.ailife.wftools2.ui.editor.utils.rememberPreviewBitmap
 import java.awt.MouseInfo
 import java.awt.Robot
@@ -142,11 +150,14 @@ private val shaderParams = mapOf(
         WmCollapsible("高级 · 原始属性与表达式") { selected.flatMap { it.attrs.keys }.distinct().sorted().forEach { key -> FieldRow(key,value(key),doc,!doc.editingBlocked){edit(key,it)} } }
     }
     }
-    if (wideEditor) expression?.let { (key,initial) -> Surface(Modifier.fillMaxSize().testTag("expression-side-panel"), color=MaterialTheme.colorScheme.surface, tonalElevation=3.dp) { ExpressionEditorContent(key,initial,doc,{expression=null}) { edit(key,it); expression=null } } }
     if (wideEditor) colorEditor?.let { (key,label,initial) -> Surface(Modifier.fillMaxSize(), color=MaterialTheme.colorScheme.surface, tonalElevation=3.dp) { KnownColorSidePanel(label,initial,{colorEditor=null}) { edit(key,it); colorEditor=null } } }
-    if (wideEditor && actionEditor) Surface(Modifier.fillMaxSize(), color=MaterialTheme.colorScheme.surface, tonalElevation=3.dp) { ActionSidePanel(value("tap_action"),{actionEditor=false}) { edit("tap_action",it);actionEditor=false } }
-    if (!wideEditor) expression?.let { (key,initial) -> ExpressionDialog(key,initial,doc,{expression=null}) { edit(key,it); expression=null } }
-    if (!wideEditor && actionEditor) ActionEditorDialog(value("tap_action"),{actionEditor=false}) { edit("tap_action",it);actionEditor=false }
+    // Keep the action picker consistent between the narrow and wide inspector. The mobile
+    // catalog is long, so it uses the same compact, continuously scrolling popup as expressions.
+    if (actionEditor) ActionEditorDialog(value("tap_action"),{actionEditor=false}) { edit("tap_action",it);actionEditor=false }
+    // Expressions stay in a focused popup even in the wide inspector. The tag
+    // directory is long and benefits from the same predictable scroll surface
+    // on both narrow and wide layouts.
+    expression?.let { (key,initial) -> ExpressionDialog(key,initial,doc,{expression=null}) { edit(key,it); expression=null } }
 }
 
 @Composable private fun RelativeNumericField(field:KnownField,doc:DocumentController,ids:Set<String>,offset:(String,Float)->Unit) {
@@ -306,55 +317,171 @@ private val tapActions = listOf("" to "未设置","tap_launcher" to "打开应�
     Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Column(Modifier.weight(1f)){Text("列数",style=MaterialTheme.typography.bodySmall);CompactField(columns,{onChange("${it}x$rows")},Modifier.fillMaxWidth())};Column(Modifier.weight(1f)){Text("行数",style=MaterialTheme.typography.bodySmall);CompactField(rows,{onChange("${columns}x$it")},Modifier.fillMaxWidth())}}
 }
 
-private val quickExpressionGroups = linkedMapOf(
-    "时间" to listOf("{dh}" to "小时", "{dm}" to "分钟", "{ds}" to "秒", "{d24h}" to "24 小时"),
-    "日期" to listOf("{Ddd}" to "星期", "{DMM}" to "月份", "{Dyyyy}" to "年份"),
-    "电量" to listOf("{bl}" to "手表电量", "{blp}" to "电量百分比", "{bv}" to "电压"),
-    "健康" to listOf("{steps}" to "步数", "{hr}" to "心率", "{cals}" to "卡路里"),
-    "睡眠" to listOf("{slp}" to "睡眠百分比", "{slt}" to "睡眠时长"),
-    "天气" to listOf("{wt}" to "当前温度", "{wth}" to "最高温度", "{wtl}" to "最低温度", "{wcond}" to "天气状况"),
-    "传感器" to listOf("{accx}" to "加速度 X", "{gyrox}" to "陀螺 X"),
-    "罗盘与 GPS" to listOf("{cdeg}" to "罗盘角度", "{lat}" to "纬度", "{lon}" to "经度"),
-    "秒表" to listOf("{sw_h}" to "秒表小时", "{sw_m}" to "秒表分钟", "{sw_s}" to "秒表秒"),
-    "网络与设备" to listOf("{pws}" to "Wi-Fi 信号", "{bt}" to "蓝牙", "{dn}" to "设备名称"),
+private val expressionCategoryLabels = mapOf(
+    "app_time" to "时间",
+    "app_date" to "日期",
+    "app_battery" to "电量",
+    "app_health" to "健康与活动",
+    "app_sleep" to "睡眠",
+    "app_weather" to "天气",
+    "wm_tag_group_weather_forecast" to "天气预报",
+    "app_sensors" to "传感器",
+    "app_compass_gps" to "罗盘与 GPS",
+    "app_stopwatch" to "秒表",
+    "app_network_device" to "网络与设备",
+    "app_memory_storage" to "内存与存储",
+    "app_alarm" to "闹钟",
+    "app_calendar" to "日历",
+    "app_counters_tweens" to "计数器与动画",
+    "app_time_zones" to "时区",
 )
 
-@Composable private fun ExpressionEditorContent(key:String,initial:String,doc:DocumentController,onDismiss:()->Unit,onApply:(String)->Unit) {
-    var text by remember(key,initial){mutableStateOf(initial)}
-    var group by remember { mutableStateOf<String?>(null) }
-    Column(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-        Row(verticalAlignment=Alignment.CenterVertically) { Text("编辑：$key 表达式",style=MaterialTheme.typography.titleMedium,modifier=Modifier.weight(1f));TextButton(onDismiss){Text("取消")};Button({onApply(text)}){Text("应用") } }
-        Text("表达式 / 脚本",style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
-        CompactField(text,{text=it},Modifier.fillMaxWidth(),multiline=true,onDraftChange={text=it},fieldHeight=190.dp)
-        Text("预览：${doc.render.evaluate(text)}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.secondary)
-        HorizontalDivider()
-        Text("插入变量",style=MaterialTheme.typography.titleSmall)
-        Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())) {
-            quickExpressionGroups.forEach { (name,tokens) ->
-                val expanded=group==name
-                Surface(onClick={group=if(expanded)null else name},modifier=Modifier.fillMaxWidth().testTag("expression-group-$name"),color=Color.Transparent) {
-                    Row(Modifier.fillMaxWidth().padding(horizontal=4.dp,vertical=10.dp),verticalAlignment=Alignment.CenterVertically) {
-                        Text(name,Modifier.weight(1f),style=MaterialTheme.typography.bodyLarge)
-                        Icon(if(expanded)Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,null,Modifier.size(20.dp))
+private fun expressionCategoryLabel(key: String): String = expressionCategoryLabels[key]
+    ?: key.removePrefix("app_").removePrefix("wm_tag_group_").replace('_', ' ').replaceFirstChar { it.titlecase() }
+
+private val mobileExpressionDescriptions = mapOf(
+    "{dh}" to "时（12 小时制）", "{dhz}" to "时（12 小时制，补零）",
+    "{dh23}" to "时（24 小时制）", "{dh23z}" to "时（24 小时制，补零）",
+    "{dm}" to "分", "{dmz}" to "分（补零）", "{ds}" to "秒", "{dsz}" to "秒（补零）",
+    "{da}" to "上午 / 下午（AM/PM）", "{drh}" to "时针角度（随分钟平滑）",
+    "{drm}" to "分针角度（平滑）", "{drs}" to "秒针角度（每秒 6°）", "{drss}" to "秒针角度（亚秒平滑）",
+    "{dd}" to "日（1–31）", "{ddz}" to "日（补零）", "{dn}" to "月（1–12）", "{dnn}" to "月（补零）",
+    "{dnnn}" to "月份英文缩写（Jan–Dec）", "{dyy}" to "年（4 位）", "{dy}" to "年（末 2 位）",
+    "{ddw}" to "星期英文缩写（Mon–Sun）", "{ddww}" to "星期英文全称",
+    "{bl}" to "手表电量（0–100）", "{blp}" to "手表电量（带％号）", "{bc}" to "充电状态", "{br}" to "电量旋转角（3.6°/％）",
+    "{shr}" to "当前心率（BPM）", "{ssc}" to "今日步数", "{sscp}" to "步数目标完成度（％）", "{scal}" to "消耗卡路里（kCal）",
+    "{wm}" to "温度单位（C / F）", "{wt}" to "当前温度", "{wtd}" to "当前温度（带单位）", "{wth}" to "今日最高温度",
+    "{wthd}" to "今日最高温度（带单位）", "{wtl}" to "今日最低温度", "{wtld}" to "今日最低温度（带单位）",
+    "{wct}" to "当前天气状况", "{wci}" to "天气条件图标代码", "{wl}" to "天气位置", "{wcl}" to "云量（0–1）",
+    "{wh}" to "湿度（0–100）", "{whp}" to "湿度（带％）", "{wml}" to "手动天气位置", "{wisday}" to "是否为白天（true / false）",
+    "{wlu}" to "天气更新时间", "{wf0dt}" to "今天预报温度", "{wf1dth}" to "明天预报最高温度", "{wf1ht}" to "下一小时预报温度",
+)
+
+private fun expressionDescription(entry: WmTagsData.TagEntry): String = mobileExpressionDescriptions[entry.tag]
+    ?: entry.descriptionKey.removePrefix("app_").replace('_', ' ')
+
+@Composable
+private fun ExpressionDialog(
+    key: String,
+    initial: String,
+    doc: DocumentController,
+    onDismiss: () -> Unit,
+    onApply: (String) -> Unit,
+) {
+    var textValue by remember(key, initial) { mutableStateOf(TextFieldValue(initial)) }
+    var expandedCategory by remember { mutableStateOf<String?>("app_time") }
+    val preview = doc.render.evaluate(textValue.text).ifBlank { "(空)" }
+    val categories = remember { WmTagsData.categories.toList() }
+
+    fun insertTag(tag: String) {
+        val text = textValue.text
+        val start = textValue.selection.start.coerceIn(0, text.length)
+        val end = textValue.selection.end.coerceIn(0, text.length)
+        val from = minOf(start, end)
+        val to = maxOf(start, end)
+        val next = text.substring(0, from) + tag + text.substring(to)
+        textValue = TextFieldValue(next, TextRange(from + tag.length))
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier
+                .widthIn(min = 560.dp, max = 820.dp)
+                .heightIn(min = 500.dp, max = 760.dp)
+                .fillMaxWidth(.82f)
+                .fillMaxHeight(.86f)
+                .testTag("expression-dialog"),
+            shape = RoundedCornerShape(18.dp),
+            tonalElevation = 8.dp,
+            shadowElevation = 12.dp,
+        ) {
+            Column(
+                Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("编辑：$key 表达式", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    TextButton(onDismiss) { Text("取消") }
+                    Button({ onApply(textValue.text) }) { Text("应用") }
+                }
+                OutlinedTextField(
+                    value = textValue,
+                    onValueChange = { textValue = it },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 62.dp, max = 108.dp),
+                    label = { Text("表达式 / 脚本") },
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                    maxLines = 4,
+                    singleLine = false,
+                )
+                Surface(
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    shape = RoundedCornerShape(9.dp),
+                ) {
+                    Column(Modifier.padding(horizontal = 12.dp, vertical = 7.dp)) {
+                        Text("预览", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = .72f))
+                        Text(preview, style = MaterialTheme.typography.titleMedium, fontFamily = FontFamily.Monospace, maxLines = 2)
                     }
                 }
-                if(expanded) Column(Modifier.fillMaxWidth().padding(start=12.dp,bottom=6.dp)) {
-                    tokens.forEach { (token,label) ->
-                        TextButton(onClick={text+=token},modifier=Modifier.fillMaxWidth().testTag("expression-token-$token"),contentPadding=PaddingValues(horizontal=10.dp,vertical=7.dp)) {
-                            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
-                                Text(label,Modifier.weight(1f));Text(token,color=MaterialTheme.colorScheme.primary,style=MaterialTheme.typography.bodySmall)
+                HorizontalDivider()
+                Text("插入变量 · ${categories.sumOf { it.second.size }} 项", style = MaterialTheme.typography.titleSmall)
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                ) {
+                    categories.forEach { (category, tags) ->
+                        item(key = "category-$category") {
+                            val expanded = expandedCategory == category
+                            Surface(
+                                onClick = { expandedCategory = if (expanded) null else category },
+                                modifier = Modifier.fillMaxWidth().testTag("expression-group-${expressionCategoryLabel(category)}"),
+                                color = Color.Transparent,
+                                shape = RoundedCornerShape(7.dp),
+                            ) {
+                                Row(
+                                    Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(expressionCategoryLabel(category), Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                                    Text("${tags.size}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Icon(
+                                        if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
+                        }
+                        if (expandedCategory == category) {
+                            items(tags, key = { "$category-${it.tag}" }) { entry ->
+                                Surface(
+                                    onClick = { insertTag(entry.tag) },
+                                    modifier = Modifier.fillMaxWidth().testTag("expression-token-${entry.tag}"),
+                                    color = Color.Transparent,
+                                    shape = RoundedCornerShape(5.dp),
+                                ) {
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Text(entry.tag, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary, modifier = Modifier.widthIn(min = 82.dp))
+                                        Text(expressionDescription(entry), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1)
+                                        Text(entry.sample, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                                HorizontalDivider(thickness = .5.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .3f))
                             }
                         }
                     }
                 }
-                HorizontalDivider(color=MaterialTheme.colorScheme.outlineVariant)
             }
         }
     }
-}
-
-@Composable private fun ExpressionDialog(key:String,initial:String,doc:DocumentController,onDismiss:()->Unit,onApply:(String)->Unit) {
-    AlertDialog(onDismissRequest=onDismiss,title={Text("编辑 $key 表达式")},text={ExpressionEditorContent(key,initial,doc,onDismiss,onApply)},confirmButton={},dismissButton={})
 }
 
 private val quickActionGroups = linkedMapOf(
@@ -363,12 +490,143 @@ private val quickActionGroups = linkedMapOf(
     "媒体" to listOf("media_play_pause" to "播放 / 暂停", "media_next" to "下一首", "vol_up" to "增大音量"),
     "表达式" to listOf("lua:" to "Lua 脚本", "script:" to "脚本动作"),
 )
+
+internal data class ActionPreset(val value: String, val label: String, val note: String = "")
+
+/**
+ * Desktop action picker catalog. The first four groups mirror Flue's
+ * WatchTapActionCatalog (including its canonical keys); aliases and desktop-only controls are
+ * kept in a final group so older faces remain editable without hiding the mobile choices.
+ */
+internal val mobileActionGroups: LinkedHashMap<String, List<ActionPreset>> = linkedMapOf(
+    "信息" to listOf(
+        ActionPreset("widget_weather", "天气", "打开天气应用"),
+        ActionPreset("widget_health", "健康", "查看健康数据"),
+        ActionPreset("widget_calendar", "日历", "查看日期与事件"),
+        ActionPreset("w_agenda", "日程", "查看接下来的安排"),
+        ActionPreset("w_fit", "健身", "运动与健身记录"),
+        ActionPreset("w_heart_rate", "心率", "测量或查看心率"),
+        ActionPreset("w_compass", "指南针", "方向与方位工具"),
+        ActionPreset("w_sports", "运动", "运动训练应用"),
+    ),
+    "通信" to listOf(
+        ActionPreset("m_email", "电子邮件", "收件箱或邮件应用"),
+        ActionPreset("voice_search", "语音搜索", "语音助手搜索或执行命令"),
+        ActionPreset("w_contacts", "联系人", "打开通讯录"),
+        ActionPreset("w_messaging", "消息", "短信或即时消息应用"),
+        ActionPreset("w_dialer", "电话", "拨号与通话应用"),
+        ActionPreset("socialmedia", "社交", "常用社交应用"),
+    ),
+    "媒体" to listOf(
+        ActionPreset("w_gallery", "相册", "浏览照片与图片"),
+        ActionPreset("w_camera", "相机", "打开拍摄应用"),
+        ActionPreset("w_music", "音乐", "打开音乐播放器"),
+        ActionPreset("browser", "浏览器", "打开网页浏览器"),
+    ),
+    "工具" to listOf(
+        ActionPreset("tap_launcher", "应用列表", "打开桌面或应用列表"),
+        ActionPreset("w_keep", "便笺", "打开笔记或待办应用"),
+        ActionPreset("w_clock", "时钟", "闹钟与时钟应用"),
+        ActionPreset("w_calculator", "计算器"),
+        ActionPreset("w_payment", "支付", "钱包或付款应用"),
+        ActionPreset("w_map", "地图", "地图与导航应用"),
+        ActionPreset("flashlight", "手电筒", "打开照明工具"),
+        ActionPreset("w_alarm", "闹钟", "打开闹钟列表"),
+        ActionPreset("w_timer", "计时器", "打开倒计时工具"),
+        ActionPreset("w_stopwatch", "秒表", "打开秒表计时"),
+        ActionPreset("w_recorder", "录音机", "打开录音应用"),
+        ActionPreset("w_settings", "系统设置", "打开设备设置"),
+    ),
+    "兼容别名" to listOf(
+        ActionPreset("w_weather", "天气（旧）"), ActionPreset("m_weather", "天气（旧别名）"),
+        ActionPreset("m_calendar", "日历（旧）"), ActionPreset("w_calendar", "日历（旧别名）"),
+        ActionPreset("w_email", "邮件（旧）"), ActionPreset("w_sms", "消息（旧）"),
+        ActionPreset("w_phone", "电话（旧）"), ActionPreset("m_camera", "相机（旧）"),
+        ActionPreset("m_music", "音乐（旧）"), ActionPreset("m_clock", "时钟（旧）"),
+        ActionPreset("m_calculator", "计算器（旧）"), ActionPreset("w_maps", "地图（旧）"),
+    ),
+    "桌面扩展" to listOf(
+        ActionPreset("open_settings", "系统设置（桌面）"), ActionPreset("battery_status", "电池状态"),
+        ActionPreset("media_play_pause", "播放 / 暂停"), ActionPreset("media_play", "播放"),
+        ActionPreset("media_pause", "暂停"), ActionPreset("media_next", "下一首"),
+        ActionPreset("media_prev", "上一首"), ActionPreset("vol_up", "增大音量"),
+        ActionPreset("vol_down", "减小音量"), ActionPreset("color_switch_next", "下一主题"),
+        ActionPreset("color_switch_prev", "上一主题"), ActionPreset("color_switch_select", "选择主题"),
+        ActionPreset("sw_start_stop", "秒表开始 / 暂停"), ActionPreset("sw_reset", "秒表重置"),
+        ActionPreset("lua:", "Lua 脚本", "输入 lua: 后接脚本"), ActionPreset("script:", "脚本动作", "输入 script: 后接脚本"),
+    ),
+)
+
 @Composable private fun ActionEditorDialog(initial:String,onDismiss:()->Unit,onApply:(String)->Unit) {
-    var text by remember(initial){mutableStateOf(initial)}
-    var group by remember { mutableStateOf<String?>(null) }
-    AlertDialog(onDismissRequest=onDismiss,title={Text("编辑点击动作")},text={Column(Modifier.widthIn(min=360.dp,max=620.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-        WmSegmented(quickActionGroups.keys.map{it to it},group ?: quickActionGroups.keys.first(),{group=it})
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(4.dp)) { quickActionGroups[group ?: quickActionGroups.keys.first()].orEmpty().forEach { (value,label) -> TextButton({text=value}){Text(label)} } }
-        CompactField(text,{text=it},Modifier.fillMaxWidth(),multiline=true,onDraftChange={text=it},fieldHeight=130.dp)
-    }},confirmButton={Button({onApply(text)}){Text("保存")}},dismissButton={TextButton(onDismiss){Text("取消")}})
+    var textValue by remember(initial) { mutableStateOf(TextFieldValue(initial, TextRange(initial.length))) }
+    var expandedGroup by remember { mutableStateOf<String?>("信息") }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(
+            Modifier.widthIn(min = 560.dp, max = 820.dp).heightIn(min = 500.dp, max = 760.dp)
+                .fillMaxWidth(.82f).fillMaxHeight(.86f).testTag("action-dialog"),
+            shape = RoundedCornerShape(18.dp), tonalElevation = 8.dp, shadowElevation = 12.dp,
+        ) {
+            Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("编辑点击动作", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    TextButton(onDismiss) { Text("取消") }
+                    Button({ onApply(textValue.text) }) { Text("应用") }
+                }
+                OutlinedTextField(
+                    value = textValue,
+                    onValueChange = { textValue = it },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 62.dp, max = 100.dp),
+                    label = { Text("动作值") },
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                    maxLines = 3,
+                    singleLine = false,
+                )
+                Text("插入动作 · ${mobileActionGroups.values.sumOf { it.size }} 项", style = MaterialTheme.typography.titleSmall)
+                LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    item {
+                        Surface(
+                            onClick = { textValue = TextFieldValue("", TextRange.Zero) },
+                            Modifier.fillMaxWidth().testTag("action-preset-empty"),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .45f),
+                            shape = RoundedCornerShape(7.dp),
+                        ) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Clear, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("未设置")
+                            }
+                        }
+                    }
+                    mobileActionGroups.forEach { (group, presets) ->
+                        val expanded = expandedGroup == group
+                        item(key = "action-group-$group") {
+                            Surface(
+                                onClick = { expandedGroup = if (expanded) null else group },
+                                Modifier.fillMaxWidth().testTag("action-group-$group"),
+                                color = Color.Transparent, shape = RoundedCornerShape(7.dp),
+                            ) {
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(group, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                                    Text("${presets.size}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Icon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, null, Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                        if (expanded) items(presets, key = { "action-$group-${it.value}" }) { preset ->
+                            Surface(
+                                onClick = { textValue = TextFieldValue(preset.value, TextRange(preset.value.length)) },
+                                Modifier.fillMaxWidth().testTag("action-preset-${preset.value}"),
+                                color = Color.Transparent, shape = RoundedCornerShape(5.dp),
+                            ) {
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(preset.value, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary, modifier = Modifier.widthIn(min = 150.dp))
+                                    Text(preset.label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1)
+                                    if (preset.note.isNotBlank()) Text(preset.note, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                }
+                            }
+                            HorizontalDivider(thickness = .5.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .3f))
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

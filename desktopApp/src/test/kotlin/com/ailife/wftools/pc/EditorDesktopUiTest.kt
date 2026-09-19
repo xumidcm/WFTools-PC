@@ -7,6 +7,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
@@ -214,6 +216,7 @@ class EditorDesktopUiTest {
         val previewBounds=preview.getUnclippedBoundsInRoot()
         preview.performMouseInput { doubleClick(center) }
         val inline=compose.onNodeWithTag("inline-text-editor").assertIsDisplayed().assertIsFocused()
+        assertEquals("快捷编辑器应把可见光标放在文字末尾", TextRange("原文".length), inline.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
         val inlineBounds=inline.getUnclippedBoundsInRoot()
         val pointerX=previewBounds.left+(previewBounds.right-previewBounds.left)/2
         val pointerY=previewBounds.top+(previewBounds.bottom-previewBounds.top)/2

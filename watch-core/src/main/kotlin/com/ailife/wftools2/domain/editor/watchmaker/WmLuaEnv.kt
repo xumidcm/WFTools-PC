@@ -1,15 +1,21 @@
 package com.ailife.wftools2.domain.editor.watchmaker
 
 import io.github.taoguan.luaj.Globals
+import io.github.taoguan.luaj.LoadState
 import io.github.taoguan.luaj.LuaTable
 import io.github.taoguan.luaj.LuaValue
 import io.github.taoguan.luaj.LuaString
 import io.github.taoguan.luaj.Varargs
+import io.github.taoguan.luaj.compiler.LuaC
+import io.github.taoguan.luaj.lib.Bit32Lib
+import io.github.taoguan.luaj.lib.DebugLib
 import io.github.taoguan.luaj.lib.OneArgFunction
+import io.github.taoguan.luaj.lib.StringLib
+import io.github.taoguan.luaj.lib.TableLib
 import io.github.taoguan.luaj.lib.TwoArgFunction
 import io.github.taoguan.luaj.lib.VarArgFunction
-import io.github.taoguan.luaj.lib.jse.JsePlatform
-import io.github.taoguan.luaj.lib.DebugLib
+import io.github.taoguan.luaj.lib.jse.JseBaseLib
+import io.github.taoguan.luaj.lib.jse.JseMathLib
 
 /**
  * Shared factory for the pure-Java Lua environments (io.github.taoguan:luaj —
@@ -35,7 +41,19 @@ object WmLuaEnv {
 
     fun newGlobals(): Globals {
         LuaString.s_metatable = stringMetatable
-        val g = JsePlatform.standardGlobals()
+        // Build the preview environment from an allow-list. Besides keeping host
+        // I/O out of the VM, this avoids deleting entries from LuaJ's global table.
+        // luaj 1.0.3 leaves a DeadSlot for each deletion and crashes in rehash()
+        // once a large WatchMaker script declares enough global variables.
+        val g = SandboxGlobals().apply {
+            load(JseBaseLib())
+            load(Bit32Lib())
+            load(TableLib())
+            load(StringLib())
+            load(JseMathLib())
+            LoadState.install(this)
+            LuaC.install(this)
+        }
         g.load(InstructionBudget())
         val math = g.get("math")
         // Lua 5.1 → 5.2 renames/removals WatchMaker faces still rely on.
@@ -97,25 +115,29 @@ object WmLuaEnv {
         g.set("unpack", table.get("unpack"))
         g.set("loadstring", g.get("load"))
         g.get("string").set("gfind", g.get("string").get("gmatch"))
-        // Sandbox: scripts/expressions never need to touch the filesystem.
-        val os = g.get("os")
-        os.set("execute", LuaValue.NIL)
-        os.set("remove", LuaValue.NIL)
-        os.set("rename", LuaValue.NIL)
-        os.set("exit", LuaValue.NIL)
-        val io = g.get("io")
-        io.set("open", LuaValue.NIL)
-        io.set("popen", LuaValue.NIL)
-        io.set("write", LuaValue.NIL)
-        io.set("output", LuaValue.NIL)
-        // The preview has no host file, Java, module-loading, or thread APIs. The
-        // private instruction hook must not be replaceable from Lua itself.
-        listOf("io", "luajava", "package", "require", "dofile", "loadfile", "debug", "coroutine", "print")
-            .forEach { g.set(it, LuaValue.NIL) }
-        os.set("getenv", LuaValue.NIL)
-        os.set("tmpname", LuaValue.NIL)
         return g
     }
+
+    /**
+     * BaseLib installs a few host-facing functions while it initialises the safe
+     * language primitives. Ignore those names before they ever enter the table;
+     * assigning NIL afterwards creates the LuaJ DeadSlots that caused #rehash to
+     * throw for faces with hundreds of script variables.
+     */
+    private class SandboxGlobals : Globals() {
+        init {
+            // WatchMaker scripts commonly expose hundreds of scalar globals. Keep
+            // their writes below LuaJ 1.0.3's fragile rehash threshold.
+            presize(0, 4096)
+        }
+
+        override fun set(key: LuaValue, value: LuaValue) {
+            if (key.isstring() && key.tojstring() in HIDDEN_GLOBALS) return
+            super.set(key, value)
+        }
+    }
+
+    private val HIDDEN_GLOBALS = setOf("dofile", "loadfile", "debug", "print")
 
     private fun checkBudget(globals: Globals) = (globals.debuglib as InstructionBudget).checkpoint()
 

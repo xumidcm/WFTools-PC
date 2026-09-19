@@ -159,6 +159,24 @@ class MarketAccountApiTest {
         assertTrue(requests.all { it.headers["Authorization"] == null })
     }
 
+    @Test fun `successful non-image profile response still falls back to canonical avatar`() {
+        val requests = mutableListOf<MarketAccountRequest>()
+        val transport = MarketAccountTransport { request ->
+            requests += request
+            if (request.url.endsWith("/stale-avatar")) {
+                MarketAccountResponse(200, "<html>login</html>".toByteArray(), "text/html")
+            } else {
+                MarketAccountResponse(200, byteArrayOf(9, 8, 7), "image/png")
+            }
+        }
+        val api = MarketAccountApi("https://example.test/api", transport)
+        assertArrayEquals(byteArrayOf(9, 8, 7), api.avatarBytesForUser("sensei", "/stale-avatar"))
+        assertEquals(
+            listOf("https://example.test/stale-avatar", "https://example.test/api/creators/sensei/avatar"),
+            requests.map { it.url },
+        )
+    }
+
     @Test fun `login session carries JWT expiry and survives encrypted session storage`() {
         val payload = Base64.getUrlEncoder().withoutPadding().encodeToString("{\"exp\":4102444800}".toByteArray())
         val token = "header.$payload.signature"
@@ -245,6 +263,37 @@ class MarketAccountApiTest {
             )
             assertEquals(302, response.status)
             assertFalse(redirected)
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test fun `real transport follows redirects for public avatar requests`() {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        var redirected = false
+        server.createContext("/avatar") { exchange ->
+            exchange.responseHeaders.add("Location", "/avatar-image")
+            exchange.sendResponseHeaders(302, -1)
+            exchange.close()
+        }
+        server.createContext("/avatar-image") { exchange ->
+            redirected = true
+            val body = byteArrayOf(1, 2, 3)
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        server.start()
+        try {
+            val response = UrlMarketAccountTransport().execute(
+                MarketAccountRequest(
+                    method = "GET",
+                    url = "http://127.0.0.1:${server.address.port}/avatar",
+                    headers = mapOf("Accept" to "image/*"),
+                )
+            )
+            assertEquals(200, response.status)
+            assertArrayEquals(byteArrayOf(1, 2, 3), response.body)
+            assertTrue(redirected)
         } finally {
             server.stop(0)
         }

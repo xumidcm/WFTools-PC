@@ -24,6 +24,7 @@ import androidx.compose.ui.awt.awtEventOrNull
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.boundsInWindow
@@ -364,5 +365,7 @@ private data class InlineTextEditRequest(val id:String,val position:androidx.com
         }
         .pointerHoverIcon(PointerIcon(Cursor(Cursor.TEXT_CURSOR)))
         .padding(9.dp).testTag("inline-text-editor"),
-        textStyle=MaterialTheme.typography.bodyLarge.copy(color=MaterialTheme.colorScheme.onSurface),singleLine=false)
+        textStyle=MaterialTheme.typography.bodyLarge.copy(color=MaterialTheme.colorScheme.onSurface),
+        cursorBrush=SolidColor(MaterialTheme.colorScheme.primary),
+        singleLine=false)
 }

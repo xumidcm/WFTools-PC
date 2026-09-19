@@ -455,7 +455,10 @@ class MarketAccountApi(
         var last: MarketAccountException? = null
         for (candidate in candidates) {
             try {
-                return readAvatar(candidate, emptyMap())
+                // A stale profile URL can return a successful HTML/JSON response instead of an
+                // image. Validate the payload here so the canonical creator endpoint still gets
+                // a chance; otherwise the UI would silently keep the letter fallback forever.
+                return readAvatar(candidate, emptyMap(), requireImage = true)
             } catch (error: MarketAccountException) {
                 last = error
             }
@@ -608,11 +611,28 @@ class MarketAccountApi(
         return resolved.toString()
     }
 
-    private fun readAvatar(url: String, headers: Map<String, String>): ByteArray {
+    private fun readAvatar(url: String, headers: Map<String, String>, requireImage: Boolean = false): ByteArray {
         val response = execute(MarketAccountRequest("GET", url, headers + mapOf("Accept" to "image/*")))
         if (response.status !in 200..299) throw MarketAccountException(errorText(response), response.status)
         if (response.body.size > MAX_AVATAR_BYTES) throw MarketAccountException("头像响应超过大小限制")
+        if (requireImage && !looksLikeImage(response.contentType, response.body)) {
+            throw MarketAccountException("头像响应不是图片")
+        }
         return response.body
+    }
+
+    private fun looksLikeImage(contentType: String, bytes: ByteArray): Boolean {
+        val type = contentType.substringBefore(';').trim().lowercase()
+        if (type.startsWith("image/")) return true
+        if (bytes.size < 12) return false
+        return bytes.copyOfRange(0, 8).contentEquals(byteArrayOf(
+            0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        )) ||
+            (bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte() && bytes[2] == 0xFF.toByte()) ||
+            (bytes[0] == 'G'.code.toByte() && bytes[1] == 'I'.code.toByte() && bytes[2] == 'F'.code.toByte() && bytes[3] == '8'.code.toByte()) ||
+            (bytes[0] == 'R'.code.toByte() && bytes[1] == 'I'.code.toByte() && bytes[2] == 'F'.code.toByte() && bytes[3] == 'F'.code.toByte() &&
+                bytes[8] == 'W'.code.toByte() && bytes[9] == 'E'.code.toByte() && bytes[10] == 'B'.code.toByte() && bytes[11] == 'P'.code.toByte()) ||
+            (bytes[0] == 'B'.code.toByte() && bytes[1] == 'M'.code.toByte())
     }
 
     private fun effectivePort(uri: URI): Int = if (uri.port >= 0) uri.port else if (uri.scheme.equals("https", true)) 443 else 80
@@ -745,9 +765,9 @@ class UrlMarketAccountTransport(private val userAgent: String = "WFTools-PC/1.0"
             connection.requestMethod = request.method
             connection.connectTimeout = 15_000
             connection.readTimeout = 120_000
-            // Never follow redirects for authenticated requests: a redirect to another origin
-            // must not receive the caller's Bearer token.
-            connection.instanceFollowRedirects = false
+            // Public avatar endpoints redirect to short-lived object-storage URLs. Follow those
+            // redirects only when no Bearer token can leak to the target origin.
+            connection.instanceFollowRedirects = request.headers["Authorization"].isNullOrBlank()
             connection.setRequestProperty("User-Agent", userAgent)
             request.headers.forEach { (key, value) -> connection.setRequestProperty(key, value) }
             val multipart = request.multipart

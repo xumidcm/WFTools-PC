@@ -653,7 +653,7 @@ private fun MarketProfilePane(
                             busy = true
                             scope.launch {
                                 withContext(Dispatchers.IO) { runCatching { api.uploadAvatar(session.token, image) } }
-                                    .onSuccess { avatarVersion += 1L; MarketAvatarCache.invalidate(me.username); message = "头像已更新"; load() }
+                                    .onSuccess { avatarVersion += 1L; MarketAvatarCache.invalidate(me.username); message = null; load() }
                                     .onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message }
                                 busy = false
                             }

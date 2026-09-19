@@ -357,24 +357,32 @@ class EditorRedContractsTest {
         compose.onNodeWithTag("color-side-panel").assertIsDisplayed()
     }
 
-    @Test fun `wide inspector embeds click action editor inside the properties pane`() {
+    @Test fun `click action editor uses the complete mobile catalog in a compact dialog`() {
         val editor = editor()
         compose.setContent { WFToolsTheme(false) { Box(Modifier.width(720.dp).height(800.dp)) {
             PropertiesPanel(editor, DropRegistry(), Modifier.fillMaxSize(), wideEditor = true)
         } } }
         compose.onNodeWithTag("edit-tap-action").performScrollTo().performClick()
-        compose.onNodeWithTag("action-side-panel").assertIsDisplayed()
+        compose.onNodeWithTag("action-dialog").assertIsDisplayed()
+        compose.onNodeWithTag("action-group-信息").assertIsDisplayed()
+        compose.onNodeWithTag("action-preset-widget_weather").assertIsDisplayed()
+        compose.onNodeWithTag("action-group-信息").performClick()
+        compose.onNodeWithTag("action-group-工具").performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithTag("action-preset-tap_launcher").assertIsDisplayed()
+        assertTrue("手机端闹钟动作必须进入完整目录", mobileActionGroups.values.flatten().any { it.value == "w_alarm" })
+        assertTrue("手机端录音机动作必须进入完整目录", mobileActionGroups.values.flatten().any { it.value == "w_recorder" })
     }
 
-    @Test fun `expression variables use a vertical expandable list in the side panel`() {
+    @Test fun `expression variables use a compact vertical expandable dialog`() {
         val editor = editor()
         compose.setContent { WFToolsTheme(false) { Box(Modifier.width(720.dp).height(800.dp)) {
             PropertiesPanel(editor, DropRegistry(), Modifier.fillMaxSize(), wideEditor = true)
         } } }
         compose.onAllNodesWithText("fx").onFirst().performScrollTo().performClick()
-        compose.onNodeWithTag("expression-side-panel").assertIsDisplayed()
+        compose.onNodeWithTag("expression-dialog").assertIsDisplayed()
+        compose.onNodeWithTag("expression-group-时间").performClick()
         val time=compose.onNodeWithTag("expression-group-时间").getUnclippedBoundsInRoot()
-        val date=compose.onNodeWithTag("expression-group-日期").getUnclippedBoundsInRoot()
+        val date=compose.onNodeWithTag("expression-group-日期").performScrollTo().getUnclippedBoundsInRoot()
         assertTrue("变量分类应纵向排列",date.top >= time.bottom)
         compose.onNodeWithTag("expression-group-时间").performClick()
         compose.onNodeWithTag("expression-token-{dh}").assertIsDisplayed()
