@@ -73,10 +73,12 @@ fun WatchMarketWindow(
     onSessionChange: (MarketSession?) -> Unit = {},
     onOpenRecent: (RecentProject) -> Unit = {},
     accountStore: MarketCredentialStore? = null,
+    sessionStore: MarketSessionStore? = null,
 ) {
     val scope = rememberCoroutineScope()
     val resolvedAccountApi = accountApi ?: remember { MarketAccountApi() }
     val resolvedAccountStore = accountStore ?: remember { PersistentMarketCredentialStore() }
+    val resolvedSessionStore = sessionStore ?: remember { PersistentMarketSessionStore() }
     var sort by remember { mutableStateOf(MarketSort.LATEST) }
     var screenType by remember { mutableStateOf(MarketScreenType.ANY) }
     var category by remember { mutableStateOf("") }
@@ -122,6 +124,37 @@ fun WatchMarketWindow(
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) { runCatching { api.categories() } }.onSuccess { categories = it }
     }
+    LaunchedEffect(Unit) {
+        val persisted = withContext(Dispatchers.IO) { runCatching { resolvedSessionStore.load() }.getOrNull() }
+        val candidate = marketSession ?: persisted
+        if (candidate == null) return@LaunchedEffect
+        val checked = withContext(Dispatchers.IO) { runCatching { resolvedAccountApi.me(candidate.token) } }
+        val profile = checked.getOrNull()
+        if (profile != null) {
+            val next = candidate.copy(
+                user = candidate.user.copy(
+                    id = profile.id.ifBlank { candidate.user.id },
+                    username = profile.username.ifBlank { candidate.user.username },
+                    role = profile.role.ifBlank { candidate.user.role },
+                    avatarUrl = profile.avatarUrl,
+                ),
+            )
+            withContext(Dispatchers.IO) { runCatching { resolvedSessionStore.save(next) } }
+            session = next
+            onSessionChange(next)
+        } else {
+            val failure = checked.exceptionOrNull()
+            if (failure is MarketAccountException && failure.status == 401) {
+                withContext(Dispatchers.IO) { runCatching { resolvedSessionStore.clear() } }
+                session = null
+                onSessionChange(null)
+            } else {
+                // Keep a locally restored token usable while the market is temporarily offline.
+                session = candidate
+                onSessionChange(candidate)
+            }
+        }
+    }
     LaunchedEffect(sort, screenType, category) { load(reset = true) }
     // Debounce the search box so typing does not fire a request per keystroke.
     LaunchedEffect(query) {
@@ -145,7 +178,9 @@ fun WatchMarketWindow(
                 badge = { if (unreadCount > 0) Badge { Text(unreadCount.coerceAtMost(99).toString()) } },
             ) {
                 OutlinedButton(onClick = { accountOpen = true }, modifier = Modifier.testTag("market-account-button")) {
-                    Icon(Icons.Default.AccountCircle, null, Modifier.size(18.dp))
+                    session?.let { current ->
+                        MarketAvatar(resolvedAccountApi, current.user.username, current.user.avatarUrl, 24.dp, tag = "market-account-avatar")
+                    } ?: Icon(Icons.Default.AccountCircle, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text(session?.user?.username ?: "登录")
                 }
@@ -261,6 +296,7 @@ fun WatchMarketWindow(
             onOpenRecent = onOpenRecent,
             openExternal = { url -> runCatching { openExternal(url) }.onFailure { onError("无法打开浏览器：${it.message}") } },
             onDismiss = { accountOpen = false },
+            sessionStore = resolvedSessionStore,
         )
     }
 }

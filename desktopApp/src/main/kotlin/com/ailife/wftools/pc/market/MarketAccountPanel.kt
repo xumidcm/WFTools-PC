@@ -1,8 +1,6 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package com.ailife.wftools.pc.market
 
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,10 +14,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.toComposeImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -39,7 +33,6 @@ import kotlinx.coroutines.withContext
 import java.awt.Component
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.LinkedHashMap
 
 private enum class MarketAccountSection(val label: String, val icon: ImageVector) {
     OVERVIEW("概览", Icons.Default.Dashboard),
@@ -48,25 +41,6 @@ private enum class MarketAccountSection(val label: String, val icon: ImageVector
     NOTIFICATIONS("通知", Icons.Default.Notifications),
     PROFILE("个人资料", Icons.Default.Person),
 }
-
-private const val AVATAR_CACHE_MAX_ENTRIES = 16
-private val avatarCache = object : LinkedHashMap<String, ImageBitmap>(AVATAR_CACHE_MAX_ENTRIES + 1, .75f, true) {
-    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap>?): Boolean = size > AVATAR_CACHE_MAX_ENTRIES
-}
-
-private fun cachedAvatar(url: String): ImageBitmap? = synchronized(avatarCache) { avatarCache[url] }
-
-private fun cacheAvatar(url: String, bitmap: ImageBitmap) {
-    synchronized(avatarCache) { avatarCache[url] = bitmap }
-}
-
-private fun invalidateAvatar(url: String?) {
-    if (!url.isNullOrBlank()) synchronized(avatarCache) { avatarCache.remove(url) }
-}
-
-private fun decodeAvatar(bytes: ByteArray): ImageBitmap? = runCatching {
-    org.jetbrains.skia.Image.makeFromEncoded(bytes).use { it.toComposeImageBitmap() }
-}.getOrNull()
 
 /** Full native account and creator dashboard hosted inside the market window. */
 @Composable
@@ -81,6 +55,7 @@ internal fun MarketAccountDialog(
     openExternal: (String) -> Unit,
     onDismiss: () -> Unit,
     credentialStore: MarketCredentialStore = PersistentMarketCredentialStore(),
+    sessionStore: MarketSessionStore = PersistentMarketSessionStore(),
 ) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
@@ -91,7 +66,7 @@ internal fun MarketAccountDialog(
             shadowElevation = 12.dp,
         ) {
             if (session == null) {
-                MarketAuthContent(api, credentialStore, onSessionChange, onDismiss)
+                MarketAuthContent(api, credentialStore, sessionStore, onSessionChange, onDismiss)
             } else {
                 MarketCreatorDashboard(
                     api = api,
@@ -103,6 +78,7 @@ internal fun MarketAccountDialog(
                     onOpenRecent = onOpenRecent,
                     openExternal = openExternal,
                     onDismiss = onDismiss,
+                    sessionStore = sessionStore,
                 )
             }
         }
@@ -110,7 +86,7 @@ internal fun MarketAccountDialog(
 }
 
 @Composable
-private fun MarketAuthContent(api: MarketAccountApi, credentialStore: MarketCredentialStore, onSessionChange: (MarketSession?) -> Unit, onDismiss: () -> Unit) {
+private fun MarketAuthContent(api: MarketAccountApi, credentialStore: MarketCredentialStore, sessionStore: MarketSessionStore, onSessionChange: (MarketSession?) -> Unit, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     val remembered = remember { runCatching { credentialStore.load() }.getOrDefault(MarketRememberedCredentials()) }
     var register by remember { mutableStateOf(false) }
@@ -172,9 +148,23 @@ private fun MarketAuthContent(api: MarketAccountApi, credentialStore: MarketCred
                             if (issue != null) { error = issue; return@Button }
                             busy = true; error = null
                             scope.launch {
-                                withContext(Dispatchers.IO) { runCatching { if (register) api.register(username, password, confirmation) else api.login(username, password) } }
+                                withContext(Dispatchers.IO) {
+                                    runCatching {
+                                        val loggedIn = if (register) api.register(username, password, confirmation) else api.login(username, password)
+                                        val account = runCatching { api.me(loggedIn.token) }.getOrNull()
+                                        if (account == null) loggedIn else loggedIn.copy(
+                                            user = loggedIn.user.copy(
+                                                id = account.id.ifBlank { loggedIn.user.id },
+                                                username = account.username.ifBlank { loggedIn.user.username },
+                                                role = account.role.ifBlank { loggedIn.user.role },
+                                                avatarUrl = account.avatarUrl,
+                                            ),
+                                        )
+                                    }
+                                }
                                     .onSuccess { next ->
                                         runCatching { credentialStore.save(username, password, rememberUsername, rememberPassword) }
+                                        runCatching { sessionStore.save(next) }
                                         onSessionChange(next)
                                     }.onFailure { error = it.message ?: "账号请求失败" }
                                 busy = false
@@ -187,7 +177,7 @@ private fun MarketAuthContent(api: MarketAccountApi, credentialStore: MarketCred
                         Icon(if (register) Icons.Default.PersonAdd else Icons.Default.Login, null, Modifier.size(18.dp)); Spacer(Modifier.width(7.dp))
                         Text(if (busy) "正在连接…" else if (register) "创建账号" else "登录")
                     }
-                    Text("仅在勾选后记住账号或密码；登录令牌只保存在当前运行会话。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("登录会话会持续保存，直到你退出登录或令牌失效。账号和密码是否预填由上面的选项控制。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -205,17 +195,29 @@ private fun MarketCreatorDashboard(
     onOpenRecent: (RecentProject) -> Unit,
     openExternal: (String) -> Unit,
     onDismiss: () -> Unit,
+    sessionStore: MarketSessionStore,
 ) {
     var section by remember { mutableStateOf(MarketAccountSection.OVERVIEW) }
     var unread by remember(session.token) { mutableIntStateOf(0) }
+    fun invalidateSession() {
+        sessionStore.clear()
+        onSessionChange(null)
+        onUnreadChange(0)
+    }
     LaunchedEffect(session.token) {
-        withContext(Dispatchers.IO) { runCatching { api.unreadCount(session.token) } }.onSuccess { unread = it; onUnreadChange(it) }
+        val account = withContext(Dispatchers.IO) { runCatching { api.me(session.token) } }
+        account.onSuccess { profile ->
+            val next = session.copy(user = session.user.copy(id = profile.id.ifBlank { session.user.id }, username = profile.username.ifBlank { session.user.username }, role = profile.role.ifBlank { session.user.role }, avatarUrl = profile.avatarUrl))
+            runCatching { sessionStore.save(next) }
+            if (next != session) onSessionChange(next)
+        }.onFailure { if (it.isInvalidMarketSession()) invalidateSession() }
+        withContext(Dispatchers.IO) { runCatching { api.unreadCount(session.token) } }
+            .onSuccess { unread = it; onUnreadChange(it) }
+            .onFailure { if (it.isInvalidMarketSession()) invalidateSession() }
     }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
-                Icon(Icons.Default.Person, null, Modifier.padding(8.dp).size(22.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
-            }
+            MarketAvatar(api, session.user.username, session.user.avatarUrl, 42.dp, tag = "market-dashboard-avatar")
             Column(Modifier.weight(1f)) {
                 Text(session.user.username, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Text("创作者 Dashboard · ${session.user.role}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -223,7 +225,7 @@ private fun MarketCreatorDashboard(
             TextButton(onClick = { runCatching { openExternal(WatchMarket.HOME_URL.trimEnd('/') + "/dashboard") } }) {
                 Icon(Icons.Default.OpenInNew, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text("网页版")
             }
-            TextButton(onClick = { onSessionChange(null); onUnreadChange(0) }, modifier = Modifier.testTag("market-logout")) { Icon(Icons.Default.Logout, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("退出登录") }
+            TextButton(onClick = { sessionStore.clear(); onSessionChange(null); onUnreadChange(0) }, modifier = Modifier.testTag("market-logout")) { Icon(Icons.Default.Logout, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("退出登录") }
             IconButton(onDismiss) { Icon(Icons.Default.Close, "关闭") }
         }
         HorizontalDivider()
@@ -243,11 +245,11 @@ private fun MarketCreatorDashboard(
             }
             Box(Modifier.weight(1f).fillMaxHeight().padding(18.dp)) {
                 when (section) {
-                    MarketAccountSection.OVERVIEW -> MarketAccountOverview(api, session)
-                    MarketAccountSection.WATCHFACES -> MarketOwnedFaces(api, session, owner)
-                    MarketAccountSection.UPLOAD -> MarketUploadFace(api, session, recentProjects, owner, onOpenRecent)
-                    MarketAccountSection.NOTIFICATIONS -> MarketNotificationsPane(api, session) { unread = it; onUnreadChange(it) }
-                    MarketAccountSection.PROFILE -> MarketProfilePane(api, session, owner)
+                    MarketAccountSection.OVERVIEW -> MarketAccountOverview(api, session, ::invalidateSession)
+                    MarketAccountSection.WATCHFACES -> MarketOwnedFaces(api, session, owner, ::invalidateSession)
+                    MarketAccountSection.UPLOAD -> MarketUploadFace(api, session, recentProjects, owner, onOpenRecent, ::invalidateSession)
+                    MarketAccountSection.NOTIFICATIONS -> MarketNotificationsPane(api, session, ::invalidateSession) { unread = it; onUnreadChange(it) }
+                    MarketAccountSection.PROFILE -> MarketProfilePane(api, session, owner, ::invalidateSession)
                 }
             }
         }
@@ -255,7 +257,7 @@ private fun MarketCreatorDashboard(
 }
 
 @Composable
-private fun MarketAccountOverview(api: MarketAccountApi, session: MarketSession) {
+private fun MarketAccountOverview(api: MarketAccountApi, session: MarketSession, onSessionInvalid: () -> Unit) {
     var stats by remember(session.token) { mutableStateOf<MarketStats?>(null) }
     var faces by remember(session.token) { mutableStateOf<List<MarketOwnedWatchface>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -264,8 +266,8 @@ private fun MarketAccountOverview(api: MarketAccountApi, session: MarketSession)
         val results = withContext(Dispatchers.IO) {
             runCatching { api.stats(session.token) } to runCatching { api.myWatchfaces(session.token) }
         }
-        results.first.onSuccess { stats = it }.onFailure { error = it.message }
-        results.second.onSuccess { faces = it }.onFailure { error = listOfNotNull(error, it.message).joinToString("；") }
+        results.first.onSuccess { stats = it }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message }
+        results.second.onSuccess { faces = it }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = listOfNotNull(error, it.message).joinToString("；") }
         loading = false
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -333,7 +335,7 @@ private fun MarketStatusChip(status: String) {
 }
 
 @Composable
-private fun MarketOwnedFaces(api: MarketAccountApi, session: MarketSession, owner: Component?) {
+private fun MarketOwnedFaces(api: MarketAccountApi, session: MarketSession, owner: Component?, onSessionInvalid: () -> Unit) {
     val scope = rememberCoroutineScope()
     var faces by remember(session.token) { mutableStateOf<List<MarketOwnedWatchface>>(emptyList()) }
     var categories by remember { mutableStateOf<List<MarketCategory>>(emptyList()) }
@@ -346,13 +348,13 @@ private fun MarketOwnedFaces(api: MarketAccountApi, session: MarketSession, owne
         val results = withContext(Dispatchers.IO) {
             runCatching { api.myWatchfaces(session.token) } to runCatching { api.categories() }
         }
-        results.first.onSuccess { faces = it }.onFailure { error = it.message }
+        results.first.onSuccess { faces = it }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message }
         results.second.onSuccess { categories = it }.onFailure { error = listOfNotNull(error, it.message).joinToString("；") }
         loading = false
     }
     deleting?.let { face ->
         AlertDialog(onDismissRequest = { deleting = null }, title = { Text("删除表盘？") }, text = { Text("将永久删除“${face.name}”及其市场文件，此操作不能撤销。") },
-            confirmButton = { Button(onClick = { val target = face; deleting = null; scope.launch { withContext(Dispatchers.IO) { runCatching { api.deleteWatchface(session.token, target.id) } }.onSuccess { refresh++ }.onFailure { error = it.message } } }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("永久删除") } },
+            confirmButton = { Button(onClick = { val target = face; deleting = null; scope.launch { withContext(Dispatchers.IO) { runCatching { api.deleteWatchface(session.token, target.id) } }.onSuccess { refresh++ }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message } } }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("永久删除") } },
             dismissButton = { TextButton({ deleting = null }) { Text("取消") } })
     }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -362,7 +364,7 @@ private fun MarketOwnedFaces(api: MarketAccountApi, session: MarketSession, owne
         }
         error?.let { AccountError(it) }
         editing?.let { face ->
-            OwnedFaceEditor(api, session, face, categories, owner, onDone = { editing = null; refresh++ }, onCancel = { editing = null }, onError = { error = it })
+            OwnedFaceEditor(api, session, face, categories, owner, onDone = { editing = null; refresh++ }, onCancel = { editing = null }, onError = { error = it }, onSessionInvalid = onSessionInvalid)
         }
         when {
             loading -> AccountLoading()
@@ -371,8 +373,8 @@ private fun MarketOwnedFaces(api: MarketAccountApi, session: MarketSession, owne
                 items(faces, key = { it.id }) { face ->
                     OwnedFaceSummary(face) {
                         IconButton({ editing = face }, Modifier.testTag("market-edit-${face.id}")) { Icon(Icons.Default.Edit, "编辑") }
-                        if (face.status == "delisted") IconButton({ scope.launch { withContext(Dispatchers.IO) { runCatching { api.republishWatchface(session.token, face.id) } }.onSuccess { refresh++ }.onFailure { error = it.message } } }) { Icon(Icons.Default.Publish, "重新发布") }
-                        else IconButton({ scope.launch { withContext(Dispatchers.IO) { runCatching { api.unlistWatchface(session.token, face.id) } }.onSuccess { refresh++ }.onFailure { error = it.message } } }) { Icon(Icons.Default.VisibilityOff, "下架") }
+                        if (face.status == "delisted") IconButton({ scope.launch { withContext(Dispatchers.IO) { runCatching { api.republishWatchface(session.token, face.id) } }.onSuccess { refresh++ }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message } } }) { Icon(Icons.Default.Publish, "重新发布") }
+                        else IconButton({ scope.launch { withContext(Dispatchers.IO) { runCatching { api.unlistWatchface(session.token, face.id) } }.onSuccess { refresh++ }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message } } }) { Icon(Icons.Default.VisibilityOff, "下架") }
                         IconButton({ deleting = face }) { Icon(Icons.Default.Delete, "删除", tint = MaterialTheme.colorScheme.error) }
                     }
                 }
@@ -391,6 +393,7 @@ private fun OwnedFaceEditor(
     onDone: () -> Unit,
     onCancel: () -> Unit,
     onError: (String) -> Unit,
+    onSessionInvalid: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var name by remember(face.id) { mutableStateOf(face.name) }
@@ -421,7 +424,7 @@ private fun OwnedFaceEditor(
                     busy = true
                     scope.launch {
                         withContext(Dispatchers.IO) { runCatching { api.editWatchface(session.token, face.id, MarketWatchfaceForm(name.trim(), description.trim(), screenType, categoryId, tags), replacement) } }
-                            .onSuccess { onDone() }.onFailure { onError(it.message ?: "保存失败") }
+                            .onSuccess { onDone() }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); onError(it.message ?: "保存失败") }
                         busy = false
                     }
                 }, enabled = !busy) { if (busy) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(6.dp)) }; Text("保存修改") }
@@ -431,7 +434,7 @@ private fun OwnedFaceEditor(
 }
 
 @Composable
-private fun MarketUploadFace(api: MarketAccountApi, session: MarketSession, recentProjects: List<RecentProject>, owner: Component?, onOpenRecent: (RecentProject) -> Unit) {
+private fun MarketUploadFace(api: MarketAccountApi, session: MarketSession, recentProjects: List<RecentProject>, owner: Component?, onOpenRecent: (RecentProject) -> Unit, onSessionInvalid: () -> Unit) {
     val scope = rememberCoroutineScope()
     var config by remember { mutableStateOf(MarketConfig()) }
     var categories by remember { mutableStateOf<List<MarketCategory>>(emptyList()) }
@@ -459,7 +462,7 @@ private fun MarketUploadFace(api: MarketAccountApi, session: MarketSession, rece
                 parsed = result; name = result.parsed.title.ifBlank { path.fileName.toString().removeSuffix(".watch") }
                 description = result.parsed.description.ifBlank { "由 WFTools-PC 上传" }; tags = result.parsed.tags.joinToString(", ")
                 screenType = normalizeScreenType(result.parsed.screenType); if (categoryId.isBlank()) categoryId = categories.firstOrNull()?.id.orEmpty()
-            }.onFailure { error = it.message }
+            }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message }
             busy = false
         }
     }
@@ -520,7 +523,7 @@ private fun MarketUploadFace(api: MarketAccountApi, session: MarketSession, rece
                         busy = true; error = null
                         scope.launch {
                             withContext(Dispatchers.IO) { runCatching { api.uploadWatchface(session.token, path, MarketWatchfaceForm(name.trim(), description.trim(), screenType, categoryId, tags)) } }
-                                .onSuccess { face -> success = face; parsed = null; selected = null }.onFailure { error = it.message }
+                                .onSuccess { face -> success = face; parsed = null; selected = null }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message }
                             busy = false
                         }
                     }, enabled = !busy, modifier = Modifier.testTag("market-upload-submit")) { if (busy) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(6.dp)) }; Icon(Icons.Default.CloudUpload, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text(if (busy) "正在上传…" else "确认上传") }
@@ -545,18 +548,20 @@ private fun ScanSummary(result: MarketParseResult) {
 }
 
 @Composable
-private fun MarketNotificationsPane(api: MarketAccountApi, session: MarketSession, onUnreadChange: (Int) -> Unit) {
+private fun MarketNotificationsPane(api: MarketAccountApi, session: MarketSession, onSessionInvalid: () -> Unit, onUnreadChange: (Int) -> Unit) {
     val scope = rememberCoroutineScope()
     var data by remember(session.token) { mutableStateOf<MarketNotifications?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
     LaunchedEffect(session.token, refresh) {
-        withContext(Dispatchers.IO) { runCatching { api.notifications(session.token, 100) } }.onSuccess { data = it; onUnreadChange(it.unread) }.onFailure { error = it.message }
+        withContext(Dispatchers.IO) { runCatching { api.notifications(session.token, 100) } }
+            .onSuccess { data = it; onUnreadChange(it.unread) }
+            .onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message }
     }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) { Text("通知", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold); Text("审核、发布和互动消息", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            if ((data?.unread ?: 0) > 0) TextButton(onClick = { scope.launch { withContext(Dispatchers.IO) { runCatching { api.markAllNotificationsRead(session.token) } }.onSuccess { refresh++ }.onFailure { error = it.message } } }) { Icon(Icons.Default.DoneAll, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("全部已读") }
+            if ((data?.unread ?: 0) > 0) TextButton(onClick = { scope.launch { withContext(Dispatchers.IO) { runCatching { api.markAllNotificationsRead(session.token) } }.onSuccess { refresh++ }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message } } }) { Icon(Icons.Default.DoneAll, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("全部已读") }
             IconButton({ refresh++ }) { Icon(Icons.Default.Refresh, "刷新") }
         }
         error?.let { AccountError(it) }
@@ -567,7 +572,7 @@ private fun MarketNotificationsPane(api: MarketAccountApi, session: MarketSessio
             else -> LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 items(notifications, key = { it.id }) { notification ->
                     Surface(onClick = {
-                        if (notification.unread) scope.launch { withContext(Dispatchers.IO) { runCatching { api.markNotificationRead(session.token, notification.id) } }.onSuccess { refresh++ }.onFailure { error = it.message } }
+                        if (notification.unread) scope.launch { withContext(Dispatchers.IO) { runCatching { api.markNotificationRead(session.token, notification.id) } }.onSuccess { refresh++ }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message } }
                     }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = if (notification.unread) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .62f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .30f)) {
                         Row(Modifier.padding(11.dp), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                             Icon(if (notification.unread) Icons.Default.MarkEmailUnread else Icons.Default.Drafts, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
@@ -581,12 +586,9 @@ private fun MarketNotificationsPane(api: MarketAccountApi, session: MarketSessio
 }
 
 @Composable
-private fun MarketProfilePane(api: MarketAccountApi, session: MarketSession, owner: Component?) {
+private fun MarketProfilePane(api: MarketAccountApi, session: MarketSession, owner: Component?, onSessionInvalid: () -> Unit) {
     val scope = rememberCoroutineScope()
     var account by remember(session.token) { mutableStateOf<MarketAccount?>(null) }
-    var avatarBitmap by remember(session.token) { mutableStateOf<ImageBitmap?>(null) }
-    var avatarLoading by remember(session.token) { mutableStateOf(false) }
-    var avatarRevision by remember(session.token) { mutableIntStateOf(0) }
     var description by remember { mutableStateOf("") }
     var timezone by remember { mutableStateOf("UTC") }
     var language by remember { mutableStateOf("zh-CN") }
@@ -596,38 +598,16 @@ private fun MarketProfilePane(api: MarketAccountApi, session: MarketSession, own
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    fun load() { scope.launch { withContext(Dispatchers.IO) { runCatching { api.me(session.token) } }.onSuccess { account = it; description = it.description; timezone = it.timezone; language = it.language }.onFailure { error = it.message } } }
+    fun load() { scope.launch { withContext(Dispatchers.IO) { runCatching { api.me(session.token) } }.onSuccess { account = it; description = it.description; timezone = it.timezone; language = it.language }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message } } }
     LaunchedEffect(session.token) { load() }
-    LaunchedEffect(session.token, account?.avatarUrl, avatarRevision) {
-        val avatarUrl = account?.avatarUrl
-        val avatarKey = account?.let { "${it.id}:$avatarUrl" }
-        if (avatarUrl.isNullOrBlank()) {
-            avatarBitmap = null
-            avatarLoading = false
-        } else {
-            avatarLoading = true
-            avatarBitmap = cachedAvatar(requireNotNull(avatarKey)) ?: withContext(Dispatchers.IO) {
-                runCatching { api.avatarBytes(session.token, avatarUrl) }.getOrNull()?.let(::decodeAvatar)
-            }?.also { cacheAvatar(requireNotNull(avatarKey), it) }
-            avatarLoading = false
-        }
-    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("个人资料", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         account?.let { me ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(58.dp)) {
-                    val avatar = avatarBitmap
-                    if (avatar != null) {
-                        Image(avatar, "${me.username} 的头像", Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
-                    } else {
-                        Box(contentAlignment = Alignment.Center) { Text(me.username.firstOrNull()?.uppercase() ?: "?", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
-                    }
-                }
+                MarketAvatar(api, me.username, me.avatarUrl, 58.dp)
                 Column(Modifier.weight(1f)) {
                     Text(me.username, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text("${me.role} · ${me.createdAt.take(10)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(when { me.avatarUrl.isNullOrBlank() -> "未设置头像"; avatarLoading -> "正在加载头像…"; avatarBitmap != null -> "头像已加载"; else -> "头像加载失败" }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 OutlinedButton(onClick = {
                     chooseImageFiles(owner).firstOrNull()?.let { image ->
@@ -638,8 +618,8 @@ private fun MarketProfilePane(api: MarketAccountApi, session: MarketSession, own
                             busy = true
                             scope.launch {
                                 withContext(Dispatchers.IO) { runCatching { api.uploadAvatar(session.token, image) } }
-                                    .onSuccess { invalidateAvatar("${me.id}:${me.avatarUrl}"); avatarRevision++; message = "头像已更新"; load() }
-                                    .onFailure { error = it.message }
+                                    .onSuccess { MarketAvatarCache.invalidate(me.username); message = "头像已更新"; load() }
+                                    .onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message }
                                 busy = false
                             }
                         }
@@ -657,7 +637,7 @@ private fun MarketProfilePane(api: MarketAccountApi, session: MarketSession, own
         }
         Button(onClick = {
             busy = true; error = null; message = null
-            scope.launch { withContext(Dispatchers.IO) { runCatching { api.updateProfile(session.token, description.trim(), timezone.trim(), language) } }.onSuccess { message = "个人资料已保存"; load() }.onFailure { error = it.message }; busy = false }
+            scope.launch { withContext(Dispatchers.IO) { runCatching { api.updateProfile(session.token, description.trim(), timezone.trim(), language) } }.onSuccess { message = "个人资料已保存"; load() }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message }; busy = false }
         }, enabled = profileReady && !busy) { Icon(Icons.Default.Save, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text("保存个人资料") }
         HorizontalDivider()
         Text("修改密码", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -672,7 +652,7 @@ private fun MarketProfilePane(api: MarketAccountApi, session: MarketSession, own
                 newPassword.length < 6 -> error = "新密码至少需要 6 个字符。"
                 newPassword != confirmPassword -> error = "两次输入的新密码不一致。"
                 currentPassword == newPassword -> error = "新密码需要与当前密码不同。"
-                else -> { busy = true; error = null; scope.launch { withContext(Dispatchers.IO) { runCatching { api.changePassword(session.token, currentPassword, newPassword) } }.onSuccess { currentPassword = ""; newPassword = ""; confirmPassword = ""; message = "密码已修改" }.onFailure { error = it.message }; busy = false } }
+                else -> { busy = true; error = null; scope.launch { withContext(Dispatchers.IO) { runCatching { api.changePassword(session.token, currentPassword, newPassword) } }.onSuccess { currentPassword = ""; newPassword = ""; confirmPassword = ""; message = "密码已修改" }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message }; busy = false } }
             }
         }, enabled = !busy) { Icon(Icons.Default.Password, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text("修改密码") }
     }
@@ -707,6 +687,12 @@ private fun LanguagePicker(value: String, onValue: (String) -> Unit, modifier: M
         OutlinedButton({ expanded = true }, Modifier.fillMaxWidth(), enabled = enabled) { Icon(Icons.Default.Language, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text(labels[value] ?: value, Modifier.weight(1f)); Icon(Icons.Default.ArrowDropDown, null) }
         DropdownMenu(expanded, { expanded = false }) { labels.forEach { (code, label) -> DropdownMenuItem(text = { Text(label) }, onClick = { expanded = false; onValue(code) }) } }
     }
+}
+
+private fun Throwable.isInvalidMarketSession(): Boolean = this is MarketAccountException && status == 401
+
+private fun onSessionInvalidIfNeeded(error: Throwable, onSessionInvalid: () -> Unit) {
+    if (error.isInvalidMarketSession()) onSessionInvalid()
 }
 
 private fun normalizeScreenType(raw: String): String = when (raw.lowercase()) {

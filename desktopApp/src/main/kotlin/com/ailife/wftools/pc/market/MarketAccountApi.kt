@@ -25,8 +25,18 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-data class MarketUser(val id: String, val username: String, val role: String)
-data class MarketSession(val token: String, val user: MarketUser)
+data class MarketUser(
+    val id: String,
+    val username: String,
+    val role: String,
+    val avatarUrl: String? = null,
+)
+
+data class MarketSession(
+    val token: String,
+    val user: MarketUser,
+    val expiresAtEpochMs: Long? = null,
+)
 
 /** Values restored into the native login form when the user opts into remembering them. */
 data class MarketRememberedCredentials(
@@ -143,6 +153,111 @@ class PersistentMarketCredentialStore(
         const val AES_KEY_BYTES = 32
         const val GCM_IV_BYTES = 12
         const val GCM_TAG_BITS = 128
+    }
+}
+
+/** Durable bearer session. The password store and this store are intentionally independent. */
+interface MarketSessionStore {
+    fun load(nowEpochMs: Long = System.currentTimeMillis()): MarketSession?
+    fun save(session: MarketSession)
+    fun clear()
+}
+
+/**
+ * Persists the session until the user logs out or the server/JWT says it is no longer valid.
+ * Windows uses user-bound DPAPI; other desktop environments use the same AES-GCM fallback as
+ * the optional remembered password store.
+ */
+class PersistentMarketSessionStore(
+    private val preferences: Preferences = Preferences.userNodeForPackage(PersistentMarketSessionStore::class.java),
+) : MarketSessionStore {
+    override fun load(nowEpochMs: Long): MarketSession? = synchronized(preferences) {
+        val token = preferences.get(KEY_TOKEN, "").let(::decrypt).orEmpty()
+        val id = preferences.get(KEY_USER_ID, "")
+        val username = preferences.get(KEY_USERNAME, "")
+        val role = preferences.get(KEY_ROLE, "user")
+        val expiresAt = preferences.getLong(KEY_EXPIRES_AT, 0L).takeIf { it > 0L }
+        if (token.isBlank() || id.isBlank() || username.isBlank() || (expiresAt != null && expiresAt <= nowEpochMs)) {
+            if (token.isNotBlank() || id.isNotBlank() || username.isNotBlank()) clear()
+            return@synchronized null
+        }
+        MarketSession(
+            token = token,
+            user = MarketUser(id, username, role, preferences.get(KEY_AVATAR_URL, "").takeIf(String::isNotBlank)),
+            expiresAtEpochMs = expiresAt,
+        )
+    }
+
+    override fun save(session: MarketSession) {
+        synchronized(preferences) {
+            preferences.put(KEY_TOKEN, encrypt(session.token))
+            preferences.put(KEY_USER_ID, session.user.id)
+            preferences.put(KEY_USERNAME, session.user.username)
+            preferences.put(KEY_ROLE, session.user.role)
+            preferences.putLong(KEY_EXPIRES_AT, session.expiresAtEpochMs ?: 0L)
+            if (session.user.avatarUrl.isNullOrBlank()) preferences.remove(KEY_AVATAR_URL)
+            else preferences.put(KEY_AVATAR_URL, session.user.avatarUrl)
+            runCatching { preferences.flush() }
+        }
+    }
+
+    override fun clear() {
+        synchronized(preferences) {
+            listOf(KEY_TOKEN, KEY_USER_ID, KEY_USERNAME, KEY_ROLE, KEY_EXPIRES_AT, KEY_AVATAR_URL, KEY_KEY)
+                .forEach(preferences::remove)
+            runCatching { preferences.flush() }
+        }
+    }
+
+    private fun encrypt(value: String): String {
+        if (System.getProperty("os.name").contains("win", ignoreCase = true)) {
+            runCatching {
+                return "dpapi:" + Base64.getEncoder().encodeToString(Crypt32Util.cryptProtectData(value.toByteArray(StandardCharsets.UTF_8)))
+            }
+        }
+        val iv = ByteArray(SESSION_IV_BYTES).also(SecureRandom()::nextBytes)
+        val cipher = Cipher.getInstance(SESSION_CIPHER)
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(keyBytes(), "AES"), GCMParameterSpec(SESSION_TAG_BITS, iv))
+        return "aes:" + Base64.getEncoder().encodeToString(iv + cipher.doFinal(value.toByteArray(StandardCharsets.UTF_8)))
+    }
+
+    private fun decrypt(encoded: String): String? {
+        if (encoded.isBlank()) return null
+        if (encoded.startsWith("dpapi:")) {
+            return runCatching {
+                String(Crypt32Util.cryptUnprotectData(Base64.getDecoder().decode(encoded.removePrefix("dpapi:"))), StandardCharsets.UTF_8)
+            }.getOrNull()
+        }
+        return runCatching {
+            val bytes = Base64.getDecoder().decode(encoded.removePrefix("aes:"))
+            require(bytes.size > SESSION_IV_BYTES)
+            val cipher = Cipher.getInstance(SESSION_CIPHER)
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes(), "AES"), GCMParameterSpec(SESSION_TAG_BITS, bytes.copyOf(SESSION_IV_BYTES)))
+            String(cipher.doFinal(bytes.copyOfRange(SESSION_IV_BYTES, bytes.size)), StandardCharsets.UTF_8)
+        }.getOrNull()
+    }
+
+    private fun keyBytes(): ByteArray {
+        val existing = preferences.getByteArray(KEY_KEY, null)
+        if (existing != null && existing.size == SESSION_KEY_BYTES) return existing
+        val generated = ByteArray(SESSION_KEY_BYTES).also(SecureRandom()::nextBytes)
+        preferences.putByteArray(KEY_KEY, generated)
+        runCatching { preferences.flush() }
+        return generated
+    }
+
+    private companion object {
+        const val KEY_TOKEN = "tokenCiphertext"
+        const val KEY_USER_ID = "userId"
+        const val KEY_USERNAME = "username"
+        const val KEY_ROLE = "role"
+        const val KEY_EXPIRES_AT = "expiresAtEpochMs"
+        const val KEY_AVATAR_URL = "avatarUrl"
+        const val KEY_KEY = "encryptionKey"
+        const val SESSION_CIPHER = "AES/GCM/NoPadding"
+        const val SESSION_KEY_BYTES = 32
+        const val SESSION_IV_BYTES = 12
+        const val SESSION_TAG_BITS = 128
     }
 }
 
@@ -280,9 +395,9 @@ class MarketAccountException(message: String, val status: Int? = null) : Excepti
 /**
  * Authenticated client for the Watchmaker Community Store user API.
  *
- * The token intentionally lives in [MarketSession] owned by the running desktop session. It is
- * never written to logs or the watch-face document; a future OS credential-store integration can
- * persist it without changing this API surface.
+ * The token lives in [MarketSession] and is persisted only through [MarketSessionStore]. This API
+ * object never writes credentials to logs or the watch-face document; the store owns the
+ * OS-bound encryption and logout/expiry cleanup.
  */
 class MarketAccountApi(
     private val baseUrl: String = WatchMarket.API_ROOT,
@@ -309,13 +424,33 @@ class MarketAccountApi(
 
     fun me(token: String): MarketAccount = parseAccount(json("GET", "/my/me", token = token).asObjectOrEmpty())
 
-    /** Downloads the public avatar bytes while keeping the URL on the market origin. */
+    /** Legacy authenticated form kept for callers compiled against the first desktop API. */
     fun avatarBytes(token: String, avatarUrl: String): ByteArray {
-        val request = MarketAccountRequest("GET", avatarRequestUrl(avatarUrl), authHeaders(token))
-        val response = execute(request)
-        if (response.status !in 200..299) throw MarketAccountException(errorText(response), response.status)
-        if (response.body.size > MAX_AVATAR_BYTES) throw MarketAccountException("头像响应超过大小限制")
-        return response.body
+        return readAvatar(avatarRequestUrl(avatarUrl), authHeaders(token))
+    }
+
+    /**
+     * Flue-compatible public avatar lookup. Relative paths are resolved from the web-site root,
+     * not the `/api` root; a missing/old URL falls back to the canonical creator route.
+     */
+    fun avatarBytesForUser(username: String, avatarUrl: String?): ByteArray {
+        val candidates = buildList {
+            avatarUrl?.takeIf(String::isNotBlank)?.let { raw ->
+                runCatching { avatarRequestUrl(raw) }.getOrNull()?.let(::add)
+            }
+            username.trim().takeIf(String::isNotBlank)?.let {
+                runCatching { avatarRequestUrl("/api/creators/${segment(it)}/avatar") }.getOrNull()?.let(::add)
+            }
+        }.distinct()
+        var last: MarketAccountException? = null
+        for (candidate in candidates) {
+            try {
+                return readAvatar(candidate, emptyMap())
+            } catch (error: MarketAccountException) {
+                last = error
+            }
+        }
+        throw last ?: MarketAccountException("头像地址为空")
     }
 
     fun updateProfile(token: String, description: String? = null, timezone: String? = null, language: String? = null): MarketAccount {
@@ -445,14 +580,27 @@ class MarketAccountApi(
         if (candidate.isAbsolute) {
             val sameOrigin = candidate.scheme.equals(base.scheme, true) && candidate.host.equals(base.host, true) &&
                 effectivePort(candidate) == effectivePort(base)
-            if (!sameOrigin) throw MarketAccountException("头像地址不是市场同源地址")
+            if (!sameOrigin || candidate.rawUserInfo != null || candidate.rawFragment != null) {
+                throw MarketAccountException("头像地址不是市场同源地址")
+            }
             return candidate.toString()
         }
         if (path.startsWith("//")) throw MarketAccountException("头像地址无效")
-        return if (path.startsWith("/")) {
-            runCatching { URI(base.scheme, base.authority, path, null, null).toString() }
-                .getOrElse { throw MarketAccountException("头像地址无效") }
-        } else url(path)
+        val rootPath = base.rawPath.orEmpty().trimEnd('/').let { if (it.endsWith("/api", true)) it.dropLast(4) else it }
+        val siteRoot = runCatching { URI(base.scheme, base.authority, rootPath.ifBlank { "/" }, null, null) }
+            .getOrElse { throw MarketAccountException("市场地址无效") }
+        val resolved = runCatching { siteRoot.resolve(candidate) }.getOrElse { throw MarketAccountException("头像地址无效") }
+        val sameOrigin = resolved.scheme.equals(base.scheme, true) && resolved.host.equals(base.host, true) &&
+            effectivePort(resolved) == effectivePort(base)
+        if (!sameOrigin || resolved.rawUserInfo != null || resolved.rawFragment != null) throw MarketAccountException("头像地址不是市场同源地址")
+        return resolved.toString()
+    }
+
+    private fun readAvatar(url: String, headers: Map<String, String>): ByteArray {
+        val response = execute(MarketAccountRequest("GET", url, headers + mapOf("Accept" to "image/*")))
+        if (response.status !in 200..299) throw MarketAccountException(errorText(response), response.status)
+        if (response.body.size > MAX_AVATAR_BYTES) throw MarketAccountException("头像响应超过大小限制")
+        return response.body
     }
 
     private fun effectivePort(uri: URI): Int = if (uri.port >= 0) uri.port else if (uri.scheme.equals("https", true)) 443 else 80
@@ -475,10 +623,10 @@ class MarketAccountApi(
         val obj = root.asObjectOrEmpty()
         val token = obj.string("token")
         if (token.isBlank()) throw MarketAccountException("登录响应缺少令牌")
-        return MarketSession(token, parseUser(obj.objectValue("user")))
+        return MarketSession(token, parseUser(obj.objectValue("user")), jwtExpiryEpochMs(token))
     }
 
-    private fun parseUser(obj: JsonObject): MarketUser = MarketUser(obj.string("id"), obj.string("username"), obj.string("role", "user"))
+    private fun parseUser(obj: JsonObject): MarketUser = MarketUser(obj.string("id"), obj.string("username"), obj.string("role", "user"), obj.stringOrNull("avatar_url"))
 
     private fun parseAccount(obj: JsonObject): MarketAccount = MarketAccount(
         id = obj.string("id"), username = obj.string("username"), role = obj.string("role", "user"),
@@ -551,6 +699,15 @@ class MarketAccountApi(
         "webp" -> "image/webp"
         else -> "application/octet-stream"
     }
+
+    private fun jwtExpiryEpochMs(token: String): Long? = runCatching {
+        val parts = token.split('.')
+        require(parts.size == 3)
+        val payload = String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8)
+        val exp = JsonParser.parseString(payload).asObjectOrEmpty().long("exp")
+        require(exp > 0L)
+        Math.multiplyExact(exp, 1_000L)
+    }.getOrNull()
 
     private companion object {
         const val MAX_AVATAR_BYTES = 4 * 1024 * 1024
@@ -644,5 +801,6 @@ private fun JsonObject.string(name: String, fallback: String = ""): String = run
 private fun JsonObject.stringOrNull(name: String): String? = string(name).takeIf(String::isNotBlank)
 private fun JsonObject.bool(name: String, fallback: Boolean = false): Boolean = runCatching { get(name)?.takeIf { !it.isJsonNull }?.asBoolean ?: fallback }.getOrDefault(fallback)
 private fun JsonObject.int(name: String, fallback: Int = 0): Int = runCatching { get(name)?.takeIf { !it.isJsonNull }?.asInt ?: fallback }.getOrDefault(fallback)
+private fun JsonObject.long(name: String, fallback: Long = 0L): Long = runCatching { get(name)?.takeIf { !it.isJsonNull }?.asLong ?: fallback }.getOrDefault(fallback)
 private fun JsonObject.strings(name: String): List<String> = get(name)?.takeIf { it.isJsonArray }?.asJsonArray?.mapNotNull { runCatching { it.asString }.getOrNull() }.orEmpty()
 private fun JsonObject.array(name: String): List<JsonElement> = get(name)?.takeIf { it.isJsonArray }?.asJsonArray?.toList().orEmpty()

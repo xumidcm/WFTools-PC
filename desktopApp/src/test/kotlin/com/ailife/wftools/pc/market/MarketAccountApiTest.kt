@@ -10,6 +10,7 @@ import java.net.InetSocketAddress
 import com.sun.net.httpserver.HttpServer
 import java.util.UUID
 import java.util.prefs.Preferences
+import java.util.Base64
 
 class MarketAccountApiTest {
     @get:Rule val temp = TemporaryFolder()
@@ -130,6 +131,48 @@ class MarketAccountApiTest {
         assertArrayEquals(byteArrayOf(1, 2, 3, 4), api.avatarBytes("jwt-token", "/api/creators/sensei/avatar"))
         assertEquals("https://example.test/api/creators/sensei/avatar", transport.requests.single().url)
         assertEquals("Bearer jwt-token", transport.requests.single().headers["Authorization"])
+    }
+
+    @Test fun `avatar lookup follows the Flue site-root rule and does not send a bearer token`() {
+        val transport = BytesTransport(byteArrayOf(1, 2, 3, 4))
+        val api = MarketAccountApi("https://example.test/api", transport)
+        assertArrayEquals(byteArrayOf(1, 2, 3, 4), api.avatarBytesForUser("sensei", "creators/sensei/avatar"))
+        assertEquals("https://example.test/creators/sensei/avatar", transport.requests.single().url)
+        assertFalse(transport.requests.single().headers.containsKey("Authorization"))
+    }
+
+    @Test fun `invalid profile avatar url falls back to the canonical creator endpoint`() {
+        val requests = mutableListOf<MarketAccountRequest>()
+        val transport = MarketAccountTransport { request ->
+            requests += request
+            if (request.url.endsWith("/api/creators/sensei/avatar")) {
+                MarketAccountResponse(200, byteArrayOf(9, 8, 7), "image/jpeg")
+            } else {
+                MarketAccountResponse(404, ByteArray(0), "text/plain")
+            }
+        }
+        val api = MarketAccountApi("https://example.test/api", transport)
+        assertArrayEquals(byteArrayOf(9, 8, 7), api.avatarBytesForUser("sensei", "https://avatars.example.invalid/sensei.jpg"))
+        assertEquals("https://example.test/api/creators/sensei/avatar", requests.last().url)
+        assertTrue(requests.all { it.headers["Authorization"] == null })
+    }
+
+    @Test fun `login session carries JWT expiry and survives encrypted session storage`() {
+        val payload = Base64.getUrlEncoder().withoutPadding().encodeToString("{\"exp\":4102444800}".toByteArray())
+        val token = "header.$payload.signature"
+        val transport = FakeTransport("{\"token\":\"$token\",\"user\":{\"id\":\"u1\",\"username\":\"sensei\",\"role\":\"user\"}}")
+        val session = MarketAccountApi("https://example.test/api", transport).login("sensei", "secret1")
+        assertEquals(4102444800000L, session.expiresAtEpochMs)
+        val node = Preferences.userRoot().node("wftools-session-test-${UUID.randomUUID()}")
+        try {
+            val store = PersistentMarketSessionStore(node)
+            store.save(session)
+            assertEquals(session, store.load(nowEpochMs = 0L))
+            assertFalse(node.get("tokenCiphertext", "").contains(token))
+            assertNull(store.load(nowEpochMs = 4102444800000L))
+        } finally {
+            node.removeNode()
+        }
     }
 
     @Test fun `remembered account and password survive without storing plaintext`() {

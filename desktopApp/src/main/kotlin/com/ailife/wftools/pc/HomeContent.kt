@@ -76,7 +76,7 @@ internal fun performFileAssociationAction(
     Box(modifier.padding(28.dp)) {
         Column(Modifier.fillMaxSize().widthIn(max=960.dp).align(Alignment.Center)) {
             Column(Modifier.fillMaxWidth().testTag("home-fixed-header"),verticalArrangement=Arrangement.spacedBy(18.dp)) {
-                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(16.dp)) {
+                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(16.dp)) {
                     // 彩蛋第一级：连点图标 5 下唤醒。解锁后设置里才会出现受保护表盘开关。
                     Image(painterResource("icons/wftools.png"),null,Modifier.size(56.dp).testTag("home-logo")
                         .clickable(interactionSource=quietClick,indication=null) {
@@ -96,6 +96,11 @@ internal fun performFileAssociationAction(
                             })
                         Text("WatchMaker 表盘编辑器",color=MaterialTheme.colorScheme.onSurfaceVariant)
                     }
+                    Spacer(Modifier.weight(1f))
+                    Column(horizontalAlignment=Alignment.End) {
+                        FilledTonalButton(onClick=app::continueSession,enabled=app.canContinueSession,modifier=Modifier.testTag("continue-session")) { Icon(Icons.Default.History,null,Modifier.size(18.dp));Spacer(Modifier.width(8.dp));Text("继续上次的会话") }
+                        Text(app.lastActiveDisplayName ?: "没有可继续的表盘",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
+                    }
                 }
                 // 创建 / 打开 / 市场 排在同一排，市场在最右。
                 Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) {
@@ -109,10 +114,6 @@ internal fun performFileAssociationAction(
                 }
                 Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                     Text("最近打开",Modifier.weight(1f),style=MaterialTheme.typography.titleLarge)
-                    Column(horizontalAlignment=Alignment.End) {
-                        FilledTonalButton(onClick=app::continueSession,enabled=app.canContinueSession,modifier=Modifier.testTag("continue-session")) { Icon(Icons.Default.History,null,Modifier.size(18.dp));Spacer(Modifier.width(8.dp));Text("继续上次的会话") }
-                        Text(app.lastActiveDisplayName ?: "没有可继续的表盘",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
-                    }
                 }
             }
             Spacer(Modifier.height(10.dp))

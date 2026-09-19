@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.Base64
 
 /** UI contracts for the market window and its post-download dialog. */
 class WatchMarketWindowTest {
@@ -35,6 +36,57 @@ class WatchMarketWindowTest {
     """.trimIndent()
 
     private fun api(body: String = listBody) = WatchMarketApi(MarketTransport { _, _ -> body.toByteArray(StandardCharsets.UTF_8) })
+
+    private class MemorySessionStore(initial: MarketSession? = null) : MarketSessionStore {
+        var value: MarketSession? = initial
+        override fun load(nowEpochMs: Long): MarketSession? = value?.takeIf { it.expiresAtEpochMs == null || it.expiresAtEpochMs > nowEpochMs }
+        override fun save(session: MarketSession) { value = session }
+        override fun clear() { value = null }
+    }
+
+    @Test fun `persisted market session is restored and its avatar replaces the header icon`() {
+        val restored = MarketSession("jwt-token", MarketUser("u1", "sensei", "user", avatarUrl = "/api/creators/sensei/avatar"))
+        val sessionStore = MemorySessionStore(restored)
+        val avatarBytes = Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+        val requests = mutableListOf<String>()
+        val accountApi = MarketAccountApi("https://example.test/api", MarketAccountTransport { request ->
+            requests += request.url
+            when {
+                request.url.endsWith("/my/me") -> MarketAccountResponse(200, "{\"id\":\"u1\",\"username\":\"sensei\",\"role\":\"user\",\"avatar_url\":\"/api/creators/sensei/avatar\"}".toByteArray(), "application/json")
+                request.url.endsWith("/api/creators/sensei/avatar") -> MarketAccountResponse(200, avatarBytes, "image/png")
+                request.url.endsWith("/config") -> MarketAccountResponse(200, "{\"features\":{}}".toByteArray(), "application/json")
+                else -> MarketAccountResponse(200, "{}".toByteArray(), "application/json")
+            }
+        })
+        compose.setContent { WFToolsTheme(false) { Surface(Modifier.fillMaxSize()) {
+            WatchMarketWindow(api(), temp.newFolder().toPath(), {}, {}, accountApi = accountApi, sessionStore = sessionStore)
+        } } }
+        compose.waitUntil(5000) { compose.onAllNodesWithText("sensei").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("market-account-button").assertExists()
+        compose.onNodeWithText("sensei").assertExists()
+        compose.onNodeWithTag("market-account-button").performClick()
+        compose.waitUntil(5000) { compose.onAllNodesWithTag("market-dashboard-avatar").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("market-dashboard-avatar").assertExists()
+        compose.runOnIdle {
+            assertTrue(requests.any { it.endsWith("/my/me") })
+            assertTrue(requests.any { it.endsWith("/api/creators/sensei/avatar") })
+            assertEquals("sensei", sessionStore.value?.user?.username)
+            assertNotNull(MarketAvatarCache.get(MarketAvatarCache.key("sensei", "/api/creators/sensei/avatar")))
+        }
+    }
+
+    @Test fun `invalid persisted session is cleared and the market returns to login`() {
+        val sessionStore = MemorySessionStore(MarketSession("expired-token", MarketUser("u1", "sensei", "user")))
+        val accountApi = MarketAccountApi("https://example.test/api", MarketAccountTransport { request ->
+            if (request.url.endsWith("/my/me")) MarketAccountResponse(401, "{\"error\":\"Invalid token\"}".toByteArray(), "application/json")
+            else MarketAccountResponse(200, "{}".toByteArray(), "application/json")
+        })
+        compose.setContent { WFToolsTheme(false) { Surface(Modifier.fillMaxSize()) {
+            WatchMarketWindow(api(), temp.newFolder().toPath(), {}, {}, accountApi = accountApi, sessionStore = sessionStore)
+        } } }
+        compose.waitUntil(5000) { compose.onAllNodesWithText("登录").fetchSemanticsNodes().isNotEmpty() }
+        compose.runOnIdle { assertNull(sessionStore.value) }
+    }
 
     @Test fun `the market offers an open in browser button pointing at the store web app`() {
         val opened = mutableListOf<String>()
