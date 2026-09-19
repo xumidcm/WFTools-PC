@@ -158,6 +158,7 @@ private fun MarketAuthContent(api: MarketAccountApi, credentialStore: MarketCred
                                                 username = account.username.ifBlank { loggedIn.user.username },
                                                 role = account.role.ifBlank { loggedIn.user.role },
                                                 avatarUrl = account.avatarUrl,
+                                                avatarVersion = account.avatarVersion,
                                             ),
                                         )
                                     }
@@ -204,10 +205,15 @@ private fun MarketCreatorDashboard(
         onSessionChange(null)
         onUnreadChange(0)
     }
+    fun updateSessionUser(user: MarketUser) {
+        val next = session.copy(user = user)
+        sessionStore.save(next)
+        onSessionChange(next)
+    }
     LaunchedEffect(session.token) {
         val account = withContext(Dispatchers.IO) { runCatching { api.me(session.token) } }
         account.onSuccess { profile ->
-            val next = session.copy(user = session.user.copy(id = profile.id.ifBlank { session.user.id }, username = profile.username.ifBlank { session.user.username }, role = profile.role.ifBlank { session.user.role }, avatarUrl = profile.avatarUrl))
+            val next = session.copy(user = session.user.copy(id = profile.id.ifBlank { session.user.id }, username = profile.username.ifBlank { session.user.username }, role = profile.role.ifBlank { session.user.role }, avatarUrl = profile.avatarUrl, avatarVersion = profile.avatarVersion))
             runCatching { sessionStore.save(next) }
             if (next != session) onSessionChange(next)
         }.onFailure { if (it.isInvalidMarketSession()) invalidateSession() }
@@ -217,7 +223,7 @@ private fun MarketCreatorDashboard(
     }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            MarketAvatar(api, session.user.username, session.user.avatarUrl, 42.dp, tag = "market-dashboard-avatar")
+            MarketAvatar(api, session.user.username, session.user.avatarUrl, 42.dp, version = session.user.avatarVersion, tag = "market-dashboard-avatar")
             Column(Modifier.weight(1f)) {
                 Text(session.user.username, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Text("创作者 Dashboard · ${session.user.role}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -249,7 +255,7 @@ private fun MarketCreatorDashboard(
                     MarketAccountSection.WATCHFACES -> MarketOwnedFaces(api, session, owner, ::invalidateSession)
                     MarketAccountSection.UPLOAD -> MarketUploadFace(api, session, recentProjects, owner, onOpenRecent, ::invalidateSession)
                     MarketAccountSection.NOTIFICATIONS -> MarketNotificationsPane(api, session, ::invalidateSession) { unread = it; onUnreadChange(it) }
-                    MarketAccountSection.PROFILE -> MarketProfilePane(api, session, owner, ::invalidateSession)
+                    MarketAccountSection.PROFILE -> MarketProfilePane(api, session, owner, ::invalidateSession, ::updateSessionUser)
                 }
             }
         }
@@ -586,9 +592,16 @@ private fun MarketNotificationsPane(api: MarketAccountApi, session: MarketSessio
 }
 
 @Composable
-private fun MarketProfilePane(api: MarketAccountApi, session: MarketSession, owner: Component?, onSessionInvalid: () -> Unit) {
+private fun MarketProfilePane(
+    api: MarketAccountApi,
+    session: MarketSession,
+    owner: Component?,
+    onSessionInvalid: () -> Unit,
+    onSessionUserChange: (MarketUser) -> Unit,
+) {
     val scope = rememberCoroutineScope()
     var account by remember(session.token) { mutableStateOf<MarketAccount?>(null) }
+    var avatarVersion by remember(session.token) { mutableLongStateOf(session.user.avatarVersion) }
     var description by remember { mutableStateOf("") }
     var timezone by remember { mutableStateOf("UTC") }
     var language by remember { mutableStateOf("zh-CN") }
@@ -598,13 +611,35 @@ private fun MarketProfilePane(api: MarketAccountApi, session: MarketSession, own
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    fun load() { scope.launch { withContext(Dispatchers.IO) { runCatching { api.me(session.token) } }.onSuccess { account = it; description = it.description; timezone = it.timezone; language = it.language }.onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message } } }
+    fun load() {
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { api.me(session.token) } }
+                .onSuccess {
+                    avatarVersion = maxOf(avatarVersion, it.avatarVersion)
+                    val refreshed = it.copy(avatarVersion = avatarVersion)
+                    account = refreshed
+                    description = it.description
+                    timezone = it.timezone
+                    language = it.language
+                    onSessionUserChange(
+                        MarketUser(
+                            id = it.id.ifBlank { session.user.id },
+                            username = it.username.ifBlank { session.user.username },
+                            role = it.role.ifBlank { session.user.role },
+                            avatarUrl = it.avatarUrl,
+                            avatarVersion = avatarVersion,
+                        ),
+                    )
+                }
+                .onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message }
+        }
+    }
     LaunchedEffect(session.token) { load() }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("个人资料", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         account?.let { me ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MarketAvatar(api, me.username, me.avatarUrl, 58.dp)
+                MarketAvatar(api, me.username, me.avatarUrl, 58.dp, version = avatarVersion)
                 Column(Modifier.weight(1f)) {
                     Text(me.username, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text("${me.role} · ${me.createdAt.take(10)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -618,7 +653,7 @@ private fun MarketProfilePane(api: MarketAccountApi, session: MarketSession, own
                             busy = true
                             scope.launch {
                                 withContext(Dispatchers.IO) { runCatching { api.uploadAvatar(session.token, image) } }
-                                    .onSuccess { MarketAvatarCache.invalidate(me.username); message = "头像已更新"; load() }
+                                    .onSuccess { avatarVersion += 1L; MarketAvatarCache.invalidate(me.username); message = "头像已更新"; load() }
                                     .onFailure { onSessionInvalidIfNeeded(it, onSessionInvalid); error = it.message }
                                 busy = false
                             }

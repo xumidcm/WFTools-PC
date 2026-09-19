@@ -45,14 +45,14 @@ class WatchMarketWindowTest {
     }
 
     @Test fun `persisted market session is restored and its avatar replaces the header icon`() {
-        val restored = MarketSession("jwt-token", MarketUser("u1", "sensei", "user", avatarUrl = "/api/creators/sensei/avatar"))
+        val restored = MarketSession("jwt-token", MarketUser("u1", "sensei", "user", avatarUrl = "/api/creators/sensei/avatar", avatarVersion = 3L))
         val sessionStore = MemorySessionStore(restored)
         val avatarBytes = Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
         val requests = mutableListOf<String>()
         val accountApi = MarketAccountApi("https://example.test/api", MarketAccountTransport { request ->
             requests += request.url
             when {
-                request.url.endsWith("/my/me") -> MarketAccountResponse(200, "{\"id\":\"u1\",\"username\":\"sensei\",\"role\":\"user\",\"avatar_url\":\"/api/creators/sensei/avatar\"}".toByteArray(), "application/json")
+                request.url.endsWith("/my/me") -> MarketAccountResponse(200, "{\"id\":\"u1\",\"username\":\"sensei\",\"role\":\"user\",\"avatar_url\":\"/api/creators/sensei/avatar\",\"avatar_version\":3}".toByteArray(), "application/json")
                 request.url.endsWith("/api/creators/sensei/avatar") -> MarketAccountResponse(200, avatarBytes, "image/png")
                 request.url.endsWith("/config") -> MarketAccountResponse(200, "{\"features\":{}}".toByteArray(), "application/json")
                 else -> MarketAccountResponse(200, "{}".toByteArray(), "application/json")
@@ -71,7 +71,8 @@ class WatchMarketWindowTest {
             assertTrue(requests.any { it.endsWith("/my/me") })
             assertTrue(requests.any { it.endsWith("/api/creators/sensei/avatar") })
             assertEquals("sensei", sessionStore.value?.user?.username)
-            assertNotNull(MarketAvatarCache.get(MarketAvatarCache.key("sensei", "/api/creators/sensei/avatar")))
+            assertEquals(3L, sessionStore.value?.user?.avatarVersion)
+            assertNotNull(MarketAvatarCache.get(MarketAvatarCache.key("sensei", "/api/creators/sensei/avatar", 3L)))
         }
     }
 

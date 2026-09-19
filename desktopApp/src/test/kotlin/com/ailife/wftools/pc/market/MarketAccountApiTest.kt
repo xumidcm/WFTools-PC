@@ -37,11 +37,13 @@ class MarketAccountApiTest {
 
     @Test fun `login sends credentials and parses the returned bearer session`() {
         val transport = FakeTransport("""
-            {"token":"jwt-token","user":{"id":"u1","username":"sensei","role":"user"}}
+            {"token":"jwt-token","user":{"id":"u1","username":"sensei","role":"user","avatar_url":"/api/creators/sensei/avatar","avatar_version":7}}
         """.trimIndent())
         val session = MarketAccountApi("https://example.test/api", transport).login("sensei", "secret1")
         assertEquals("jwt-token", session.token)
         assertEquals("sensei", session.user.username)
+        assertEquals("/api/creators/sensei/avatar", session.user.avatarUrl)
+        assertEquals(7L, session.user.avatarVersion)
         assertEquals("POST", transport.requests.single().method)
         assertTrue(transport.requests.single().url.endsWith("/auth/login"))
         assertTrue(String(requireNotNull(transport.requests.single().body), StandardCharsets.UTF_8).contains("\"username\":\"sensei\""))
@@ -160,7 +162,7 @@ class MarketAccountApiTest {
     @Test fun `login session carries JWT expiry and survives encrypted session storage`() {
         val payload = Base64.getUrlEncoder().withoutPadding().encodeToString("{\"exp\":4102444800}".toByteArray())
         val token = "header.$payload.signature"
-        val transport = FakeTransport("{\"token\":\"$token\",\"user\":{\"id\":\"u1\",\"username\":\"sensei\",\"role\":\"user\"}}")
+        val transport = FakeTransport("{\"token\":\"$token\",\"user\":{\"id\":\"u1\",\"username\":\"sensei\",\"role\":\"user\",\"avatar_version\":4}}")
         val session = MarketAccountApi("https://example.test/api", transport).login("sensei", "secret1")
         assertEquals(4102444800000L, session.expiresAtEpochMs)
         val node = Preferences.userRoot().node("wftools-session-test-${UUID.randomUUID()}")

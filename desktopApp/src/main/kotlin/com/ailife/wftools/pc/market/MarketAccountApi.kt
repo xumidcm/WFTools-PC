@@ -30,6 +30,7 @@ data class MarketUser(
     val username: String,
     val role: String,
     val avatarUrl: String? = null,
+    val avatarVersion: Long = 0L,
 )
 
 data class MarketSession(
@@ -183,7 +184,13 @@ class PersistentMarketSessionStore(
         }
         MarketSession(
             token = token,
-            user = MarketUser(id, username, role, preferences.get(KEY_AVATAR_URL, "").takeIf(String::isNotBlank)),
+            user = MarketUser(
+                id = id,
+                username = username,
+                role = role,
+                avatarUrl = preferences.get(KEY_AVATAR_URL, "").takeIf(String::isNotBlank),
+                avatarVersion = preferences.getLong(KEY_AVATAR_VERSION, 0L).coerceAtLeast(0L),
+            ),
             expiresAtEpochMs = expiresAt,
         )
     }
@@ -195,6 +202,7 @@ class PersistentMarketSessionStore(
             preferences.put(KEY_USERNAME, session.user.username)
             preferences.put(KEY_ROLE, session.user.role)
             preferences.putLong(KEY_EXPIRES_AT, session.expiresAtEpochMs ?: 0L)
+            preferences.putLong(KEY_AVATAR_VERSION, session.user.avatarVersion.coerceAtLeast(0L))
             if (session.user.avatarUrl.isNullOrBlank()) preferences.remove(KEY_AVATAR_URL)
             else preferences.put(KEY_AVATAR_URL, session.user.avatarUrl)
             runCatching { preferences.flush() }
@@ -203,7 +211,7 @@ class PersistentMarketSessionStore(
 
     override fun clear() {
         synchronized(preferences) {
-            listOf(KEY_TOKEN, KEY_USER_ID, KEY_USERNAME, KEY_ROLE, KEY_EXPIRES_AT, KEY_AVATAR_URL, KEY_KEY)
+            listOf(KEY_TOKEN, KEY_USER_ID, KEY_USERNAME, KEY_ROLE, KEY_EXPIRES_AT, KEY_AVATAR_URL, KEY_AVATAR_VERSION, KEY_KEY)
                 .forEach(preferences::remove)
             runCatching { preferences.flush() }
         }
@@ -253,6 +261,7 @@ class PersistentMarketSessionStore(
         const val KEY_ROLE = "role"
         const val KEY_EXPIRES_AT = "expiresAtEpochMs"
         const val KEY_AVATAR_URL = "avatarUrl"
+        const val KEY_AVATAR_VERSION = "avatarVersion"
         const val KEY_KEY = "encryptionKey"
         const val SESSION_CIPHER = "AES/GCM/NoPadding"
         const val SESSION_KEY_BYTES = 32
@@ -271,6 +280,7 @@ data class MarketAccount(
     val timezone: String = "UTC",
     val language: String = "en",
     val avatarUrl: String? = null,
+    val avatarVersion: Long = 0L,
 )
 
 data class MarketCategory(val id: String, val name: String, val slug: String)
@@ -470,9 +480,11 @@ class MarketAccountApi(
         ))
     }
 
-    fun uploadAvatar(token: String, file: Path) {
+    fun uploadAvatar(token: String, file: Path): String? {
         val readable = requireReadableFile(file)
-        multipart("POST", "/my/profile/avatar", token, MarketMultipart(file = MarketMultipartFile("file", readable, imageContentType(readable))))
+        return multipart("POST", "/my/profile/avatar", token, MarketMultipart(file = MarketMultipartFile("file", readable, imageContentType(readable))))
+            .asObjectOrEmpty()
+            .stringOrNull("avatar_url")
     }
 
     fun categories(): List<MarketCategory> = json("GET", "/categories").asObjectOrEmpty().array("data").mapNotNull(::parseCategory)
@@ -626,12 +638,19 @@ class MarketAccountApi(
         return MarketSession(token, parseUser(obj.objectValue("user")), jwtExpiryEpochMs(token))
     }
 
-    private fun parseUser(obj: JsonObject): MarketUser = MarketUser(obj.string("id"), obj.string("username"), obj.string("role", "user"), obj.stringOrNull("avatar_url"))
+    private fun parseUser(obj: JsonObject): MarketUser = MarketUser(
+        id = obj.string("id"),
+        username = obj.string("username"),
+        role = obj.string("role", "user"),
+        avatarUrl = obj.stringOrNull("avatar_url"),
+        avatarVersion = obj.long("avatar_version").coerceAtLeast(0L),
+    )
 
     private fun parseAccount(obj: JsonObject): MarketAccount = MarketAccount(
         id = obj.string("id"), username = obj.string("username"), role = obj.string("role", "user"),
         disabled = obj.bool("disabled"), createdAt = obj.string("created_at"), description = obj.string("description"),
         timezone = obj.string("timezone", "UTC"), language = obj.string("language", "en"), avatarUrl = obj.stringOrNull("avatar_url"),
+        avatarVersion = obj.long("avatar_version").coerceAtLeast(0L),
     )
 
     private fun parseCategory(element: JsonElement): MarketCategory? {

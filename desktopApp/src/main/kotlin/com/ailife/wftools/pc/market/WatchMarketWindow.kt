@@ -137,6 +137,7 @@ fun WatchMarketWindow(
                     username = profile.username.ifBlank { candidate.user.username },
                     role = profile.role.ifBlank { candidate.user.role },
                     avatarUrl = profile.avatarUrl,
+                    avatarVersion = profile.avatarVersion,
                 ),
             )
             withContext(Dispatchers.IO) { runCatching { resolvedSessionStore.save(next) } }
@@ -179,7 +180,7 @@ fun WatchMarketWindow(
             ) {
                 OutlinedButton(onClick = { accountOpen = true }, modifier = Modifier.testTag("market-account-button")) {
                     session?.let { current ->
-                        MarketAvatar(resolvedAccountApi, current.user.username, current.user.avatarUrl, 24.dp, tag = "market-account-avatar")
+                        MarketAvatar(resolvedAccountApi, current.user.username, current.user.avatarUrl, 24.dp, version = current.user.avatarVersion, tag = "market-account-avatar")
                     } ?: Icon(Icons.Default.AccountCircle, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text(session?.user?.username ?: "登录")
