@@ -1,5 +1,6 @@
 package com.ailife.wftools.pc.market
 
+import com.sun.jna.platform.win32.Crypt32Util
 import com.ailife.wftools.pc.WatchMarket
 import com.google.gson.JsonElement
 import com.google.gson.JsonNull
@@ -43,7 +44,8 @@ interface MarketCredentialStore {
 
 /**
  * Small per-user credential store for the login form. The bearer token deliberately remains
- * session-only; an opted-in password is encrypted before it reaches the Preferences backend.
+ * session-only; Windows uses the user-bound DPAPI for an opted-in password. Linux and recovery
+ * environments use an AES-GCM fallback so the password is never written as plain text.
  */
 class PersistentMarketCredentialStore(
     private val preferences: Preferences = Preferences.userNodeForPackage(PersistentMarketCredentialStore::class.java),
@@ -82,6 +84,15 @@ class PersistentMarketCredentialStore(
     }
 
     private fun encrypt(value: String): String {
+        if (isWindows()) {
+            runCatching {
+                return "dpapi:" + Base64.getEncoder().encodeToString(Crypt32Util.cryptProtectData(value.toByteArray(StandardCharsets.UTF_8)))
+            }
+        }
+        return "aes:" + legacyEncrypt(value)
+    }
+
+    private fun legacyEncrypt(value: String): String {
         val iv = ByteArray(GCM_IV_BYTES).also(SecureRandom()::nextBytes)
         val cipher = Cipher.getInstance(CIPHER)
         cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(keyBytes(), "AES"), GCMParameterSpec(GCM_TAG_BITS, iv))
@@ -89,7 +100,20 @@ class PersistentMarketCredentialStore(
         return Base64.getEncoder().encodeToString(iv + encrypted)
     }
 
-    private fun decrypt(encoded: String): String? = runCatching {
+    private fun decrypt(encoded: String): String? {
+        if (encoded.startsWith("dpapi:")) {
+            return runCatching {
+                val payload = Base64.getDecoder().decode(encoded.removePrefix("dpapi:"))
+                String(Crypt32Util.cryptUnprotectData(payload), StandardCharsets.UTF_8)
+            }.getOrNull()
+        }
+        return runCatching {
+            val legacy = encoded.removePrefix("aes:")
+            legacyDecrypt(legacy)
+        }.getOrNull()
+    }
+
+    private fun legacyDecrypt(encoded: String): String? = runCatching {
         val payload = Base64.getDecoder().decode(encoded)
         if (payload.size <= GCM_IV_BYTES) return null
         val iv = payload.copyOfRange(0, GCM_IV_BYTES)
@@ -97,6 +121,8 @@ class PersistentMarketCredentialStore(
         cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes(), "AES"), GCMParameterSpec(GCM_TAG_BITS, iv))
         String(cipher.doFinal(payload.copyOfRange(GCM_IV_BYTES, payload.size)), StandardCharsets.UTF_8)
     }.getOrNull()
+
+    private fun isWindows(): Boolean = System.getProperty("os.name").contains("win", ignoreCase = true)
 
     private fun keyBytes(): ByteArray {
         val existing = preferences.getByteArray(KEY_KEY, null)

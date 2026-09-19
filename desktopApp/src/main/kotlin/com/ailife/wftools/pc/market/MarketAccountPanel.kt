@@ -72,7 +72,6 @@ private fun decodeAvatar(bytes: ByteArray): ImageBitmap? = runCatching {
 @Composable
 internal fun MarketAccountDialog(
     api: MarketAccountApi,
-    credentialStore: MarketCredentialStore = PersistentMarketCredentialStore(),
     session: MarketSession?,
     recentProjects: List<RecentProject>,
     owner: Component?,
@@ -81,6 +80,7 @@ internal fun MarketAccountDialog(
     onOpenRecent: (RecentProject) -> Unit,
     openExternal: (String) -> Unit,
     onDismiss: () -> Unit,
+    credentialStore: MarketCredentialStore = PersistentMarketCredentialStore(),
 ) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
@@ -600,14 +600,15 @@ private fun MarketProfilePane(api: MarketAccountApi, session: MarketSession, own
     LaunchedEffect(session.token) { load() }
     LaunchedEffect(session.token, account?.avatarUrl, avatarRevision) {
         val avatarUrl = account?.avatarUrl
+        val avatarKey = account?.let { "${it.id}:$avatarUrl" }
         if (avatarUrl.isNullOrBlank()) {
             avatarBitmap = null
             avatarLoading = false
         } else {
             avatarLoading = true
-            avatarBitmap = cachedAvatar(avatarUrl) ?: withContext(Dispatchers.IO) {
+            avatarBitmap = cachedAvatar(requireNotNull(avatarKey)) ?: withContext(Dispatchers.IO) {
                 runCatching { api.avatarBytes(session.token, avatarUrl) }.getOrNull()?.let(::decodeAvatar)
-            }?.also { cacheAvatar(avatarUrl, it) }
+            }?.also { cacheAvatar(requireNotNull(avatarKey), it) }
             avatarLoading = false
         }
     }
@@ -637,7 +638,7 @@ private fun MarketProfilePane(api: MarketAccountApi, session: MarketSession, own
                             busy = true
                             scope.launch {
                                 withContext(Dispatchers.IO) { runCatching { api.uploadAvatar(session.token, image) } }
-                                    .onSuccess { invalidateAvatar(me.avatarUrl); avatarRevision++; message = "头像已更新"; load() }
+                                    .onSuccess { invalidateAvatar("${me.id}:${me.avatarUrl}"); avatarRevision++; message = "头像已更新"; load() }
                                     .onFailure { error = it.message }
                                 busy = false
                             }

@@ -260,7 +260,7 @@ class AgentProviderClient(
     private fun authHeaders(profile: AiProviderProfile, apiKey: String?): Map<String, String> = buildMap {
         put("Content-Type", "application/json")
         put("Accept", "text/event-stream, application/json")
-        put("User-Agent", "Flue-Agent/${"0.1.5"}")
+        put("User-Agent", "Flue-Agent/${"0.1.6"}")
         if (!apiKey.isNullOrBlank()) {
             if (profile.protocol == AiProtocol.CLAUDE_MESSAGES) {
                 put("x-api-key", apiKey)

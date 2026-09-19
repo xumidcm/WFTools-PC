@@ -69,10 +69,10 @@ fun WatchMarketWindow(
     recentProjects: List<RecentProject> = emptyList(),
     owner: Component? = null,
     accountApi: MarketAccountApi? = null,
-    accountStore: MarketCredentialStore? = null,
     marketSession: MarketSession? = null,
     onSessionChange: (MarketSession?) -> Unit = {},
     onOpenRecent: (RecentProject) -> Unit = {},
+    accountStore: MarketCredentialStore? = null,
 ) {
     val scope = rememberCoroutineScope()
     val resolvedAccountApi = accountApi ?: remember { MarketAccountApi() }
@@ -442,7 +442,7 @@ private fun cachePreview(id: String, bitmap: ImageBitmap) {
         modifier = Modifier.testTag("market-detail"),
         title = {
             if (loading) {
-                Text("正在加载表盘详情…", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text("表盘详情", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             } else {
                 val shown = requireNotNull(detail)
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -467,10 +467,7 @@ private fun cachePreview(id: String, bitmap: ImageBitmap) {
         text = {
             if (loading) {
                 Box(Modifier.widthIn(min = 420.dp, max = 640.dp).heightIn(min = 360.dp), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        CircularProgressIndicator(Modifier.size(42.dp).testTag("market-detail-loading"), strokeWidth = 4.dp)
-                        Text("正在从表盘市场读取完整信息", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                    CircularProgressIndicator(Modifier.size(42.dp).testTag("market-detail-loading"), strokeWidth = 4.dp)
                 }
             } else {
                 val shown = requireNotNull(detail)
