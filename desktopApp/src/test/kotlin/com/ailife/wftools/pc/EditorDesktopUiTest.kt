@@ -293,7 +293,11 @@ class EditorDesktopUiTest {
             clipboard.setContents(StringSelection("粘贴到 Agent"), null)
             input.performClick()
             input.performKeyInput { keyDown(Key.CtrlLeft); pressKey(Key.V); keyUp(Key.CtrlLeft) }
-            input.assertTextContains("粘贴到 Agent")
+            // The paste is handled asynchronously off the system clipboard, so poll the
+            // editable text instead of asserting the instant the key event is injected.
+            compose.waitUntil(5000) {
+                runCatching { input.assertTextContains("粘贴到 Agent") }.isSuccess
+            }
             assertEquals(originalLayers, editor.view.layers.size)
 
             val image = BufferedImage(8, 8, BufferedImage.TYPE_INT_ARGB)
