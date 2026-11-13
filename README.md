@@ -149,6 +149,7 @@ Dependency versions live in a single place: [`gradle/libs.versions.toml`](gradle
 - [Mobile parity notes](docs/windows/MOBILE_PARITY.md) — how desktop behaviour maps to the Android app.
 - [Product definition](PRODUCT.md) and [design contract](DESIGN.md) — the agreed scope and visual language.
 - [Design specs](docs/superpowers/specs) — dated decision records for canvas input, distribution, market preview and account handling.
+- [Release process](docs/RELEASING.md) — how a version is built, packaged, tagged and published.
 - [Third-party notices](packaging/licenses/THIRD-PARTY-NOTICES.md) — every component shipped in a package.
 
 ## Known limitations

@@ -148,6 +148,7 @@ Linux 版使用发行版提供的 VLC/LibVLC 与 FFmpeg；Windows 版自带 Java
 - [手机版对齐说明](docs/windows/MOBILE_PARITY.md)：桌面行为与手机版的对应关系。
 - [产品定义](PRODUCT.md) 与 [设计契约](DESIGN.md)：已确认的范围与视觉语言。
 - [设计规格](docs/superpowers/specs)：画布输入、分发、市场预览与账号处理的带日期决策记录。
+- [发布流程](docs/RELEASING.md)：一个版本如何构建、打包、打标签与发布。
 - [第三方声明](packaging/licenses/THIRD-PARTY-NOTICES.md)：随包分发的每一个组件。
 
 ## 已知限制
