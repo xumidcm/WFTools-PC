@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -38,11 +38,15 @@ jobs:
 
       # libvlc is a runtime dependency of watch-renderer's media tests. The packaged
       # Windows build ships its own copy; CI uses the distribution's instead.
-      - name: Install VLC runtime (Linux)
+      # fonts-noto-cjk is required by DesktopGraphicsTest: the renderer relies on a
+      # system CJK fallback instead of bundling one, exactly like the Linux package.
+      - name: Install VLC runtime and CJK fonts (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libvlc-dev vlc-plugin-base xvfb
+          sudo apt-get install -y --no-install-recommends \
+            libvlc-dev vlc-plugin-base xvfb fonts-noto-cjk
+          fc-cache -f
 
       - name: Install VLC runtime (Windows)
         if: runner.os == 'Windows'
