@@ -12,7 +12,7 @@
 
 WFTools-PC 把手机版 WFTools 的功能搬到为键盘鼠标设计的工作站上：512×512 设计坐标系里的精确图层编辑、完整的 WatchMaker 运行时预览（表达式、Lua、视频、音频、传感器）、真正的文件系统读写，以及一个表盘一个窗口。贯穿全部设计的一条硬性约束是**无损往返**——未知 XML、脚本、未引用素材和元数据一律保留，任何失败的操作都不能损坏原文件。
 
-> 本项目由 Android 版移植而来，原实现保留在 [`app/`](app) 作为迁移参考，不参与默认 Gradle 构建。
+> 本项目由 Android 版移植而来，原实现不随本仓库分发，其源码由 AILIFE 发布在 [gitlab.com/ailife8881/wftools](https://gitlab.com/ailife8881/wftools)。
 
 ## 功能
 
@@ -128,7 +128,6 @@ Linux 版使用发行版提供的 VLC/LibVLC 与 FFmpeg；Windows 版自带 Java
 | [`watch-renderer`](watch-renderer) | WatchMaker 运行时：表达式求值、Lua、图层渲染、媒体播放、缩略图、捕获与导出 |
 | [`agent-core`](agent-core) | AI Provider 配置与 HTTP 客户端、流式解析、上下文预算、工具契约 |
 | [`desktopApp`](desktopApp) | Compose Desktop 界面、平台集成（Windows 通用对话框、文件关联、单实例路由）、国际化、打包 |
-| [`app`](app) | 上游 Android 实现，仅作参考，**不**参与默认构建 |
 | [`scripts`](scripts) | 构建、打包与验证脚本 |
 | [`docs`](docs) | 设计决策、实施状态与使用说明 |
 | [`packaging`](packaging) | 图标、许可证文本、第三方声明与各平台打包说明 |

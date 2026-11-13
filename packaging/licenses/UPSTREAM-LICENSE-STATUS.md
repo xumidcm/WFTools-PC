@@ -10,7 +10,7 @@
 
 ## 本仓库的许可证
 
-本仓库的 `watch-core`、`watch-renderer`、`agent-core`、`desktopApp` 与 `app/` 内的代码，随本仓库以 **GNU 通用公共许可证第 3 版（GPL-3.0）** 分发，见根目录 [`LICENSE`](../../LICENSE)。
+本仓库的 `watch-core`、`watch-renderer`、`agent-core` 与 `desktopApp` 内的代码，随本仓库以 **GNU 通用公共许可证第 3 版（GPL-3.0）** 分发，见根目录 [`LICENSE`](../../LICENSE)。
 
 上游快照既未提供 `LICENSE`，也未发现 WFTools 自身的授权声明，因此本文件不对上游代码的授权状况作说明或推定。若上游后续补充正式许可证文本，以正式文本为准并同步更新本文件。
 

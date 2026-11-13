@@ -12,7 +12,7 @@ A desktop editor for [WatchMaker](https://getwatchmaker.com/) `.watch` watch fac
 
 WFTools-PC takes the feature set of the mobile WFTools app and rebuilds it for a mouse-and-keyboard workstation: precise layer editing on a 512×512 design canvas, the full WatchMaker runtime preview (expressions, Lua, video, audio, sensors), real file-system access, and one window per watch face. The guiding constraint is **lossless round-tripping** — unknown XML, scripts, unreferenced assets and metadata are always preserved, and a failed operation must never damage your original file.
 
-> The Android application this project was ported from is kept in [`app/`](app) as a migration reference. It is not part of the default Gradle build.
+> The Android application this project was ported from is not distributed here. Its original sources are published by AILIFE at [gitlab.com/ailife8881/wftools](https://gitlab.com/ailife8881/wftools).
 
 ## Features
 
@@ -128,7 +128,6 @@ Both scripts verify the bundled runtime, VLC provenance and licence files, compu
 | [`watch-renderer`](watch-renderer) | WatchMaker runtime: expression evaluation, Lua, layer rendering, media playback, thumbnails, capture/export |
 | [`agent-core`](agent-core) | AI provider profiles and HTTP clients, streaming parsers, context budgeting, tool contracts |
 | [`desktopApp`](desktopApp) | Compose Desktop UI, platform integration (Windows common dialogs, file association, instance broker), i18n, packaging |
-| [`app`](app) | The upstream Android implementation, retained as a reference and **not** part of the default build |
 | [`scripts`](scripts) | Build, package and verification scripts |
 | [`docs`](docs) | Design decisions, implementation status and the user guide |
 | [`packaging`](packaging) | Icons, licence texts, third-party notices and per-platform package notes |

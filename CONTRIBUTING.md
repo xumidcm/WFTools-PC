@@ -34,7 +34,7 @@
 
 - **JDK 21**，工具链已固定在 21。
 - 使用仓库自带 wrapper：`./gradlew`（Linux/macOS）或 `.\gradlew.bat`（Windows PowerShell）。
-- 不需要单独安装 Gradle，也不需要 Android SDK——`app/` 不在默认构建里。
+- 不需要单独安装 Gradle，也不需要 Android SDK：本仓库只构建四个 JVM 模块。
 
 常用命令：
 

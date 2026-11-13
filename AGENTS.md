@@ -8,7 +8,8 @@ WFTools-PC is a Kotlin/JVM Compose Desktop WatchMaker editor. Default modules:
 - `watch-renderer/` — rendering, media playback, previews, and capture/export.
 - `agent-core/` — provider/session integration and agent contracts.
 - `desktopApp/` — Compose Desktop UI, wiring, resources, and packaging.
-- `app/` — the Android implementation retained as a migration reference; it is not included by the default `settings.gradle.kts`.
+
+The upstream Android implementation is not part of this repository; the WFTools-PC tree only builds the four JVM modules listed above.
 
 Tests are under each module's `src/test/kotlin`; documentation is in `docs/`, with release scripts and assets in `scripts/` and `packaging/`.
 

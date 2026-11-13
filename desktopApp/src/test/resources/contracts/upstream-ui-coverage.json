@@ -1,7 +1,7 @@
 [
   {
     "component": "WmMarkersParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
     "scope": "layer",
     "bindings": [
       "markers"
@@ -21,7 +21,7 @@
   },
   {
     "component": "WmMarkersHmParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
     "scope": "layer",
     "bindings": [
       "markers_hm"
@@ -40,7 +40,7 @@
   },
   {
     "component": "WmTextRingParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
     "scope": "layer",
     "bindings": [
       "text_ring"
@@ -65,7 +65,7 @@
   },
   {
     "component": "WmSeriesParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
     "scope": "layer",
     "bindings": [
       "series"
@@ -89,7 +89,7 @@
   },
   {
     "component": "WmCalendarParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
     "scope": "layer",
     "bindings": [
       "calendar"
@@ -113,7 +113,7 @@
   },
   {
     "component": "WmChartParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
     "scope": "layer",
     "bindings": [
       "chart"
@@ -144,7 +144,7 @@
   },
   {
     "component": "WmVideoParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
     "scope": "layer",
     "bindings": [
       "video"
@@ -159,7 +159,7 @@
   },
   {
     "component": "WmMapParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
     "scope": "layer",
     "bindings": [
       "map"
@@ -176,7 +176,7 @@
   },
   {
     "component": "WmGallery2dParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmClockParams.kt",
     "scope": "layer",
     "bindings": [
       "gallery_2d"
@@ -190,7 +190,7 @@
   },
   {
     "component": "WmImageParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmImageParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmImageParams.kt",
     "scope": "layer",
     "bindings": [
       "image"
@@ -205,7 +205,7 @@
   },
   {
     "component": "WmImageGifParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmImageParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmImageParams.kt",
     "scope": "layer",
     "bindings": [
       "image_gif"
@@ -220,7 +220,7 @@
   },
   {
     "component": "WmImageCondParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmImageParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmImageParams.kt",
     "scope": "layer",
     "bindings": [
       "image_cond"
@@ -238,7 +238,7 @@
   },
   {
     "component": "WmShapeParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
     "scope": "layer",
     "bindings": [
       "shape",
@@ -257,7 +257,7 @@
   },
   {
     "component": "WmProgressParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
     "scope": "layer",
     "bindings": [
       "progress"
@@ -281,7 +281,7 @@
   },
   {
     "component": "WmRingParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
     "scope": "layer",
     "bindings": [
       "ring"
@@ -304,7 +304,7 @@
   },
   {
     "component": "WmOutlineParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
     "scope": "layer",
     "bindings": [
       "text",
@@ -324,7 +324,7 @@
   },
   {
     "component": "WmShaderParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmShapeParams.kt",
     "scope": "layer",
     "bindings": [
       "image",
@@ -350,7 +350,7 @@
   },
   {
     "component": "WmTextParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmTextParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmTextParams.kt",
     "scope": "layer",
     "bindings": [
       "text",
@@ -372,7 +372,7 @@
   },
   {
     "component": "WmTextCurvedParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmTextParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmTextParams.kt",
     "scope": "layer",
     "bindings": [
       "text_curved"
@@ -387,7 +387,7 @@
   },
   {
     "component": "WmTextShadowParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmTextParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmTextParams.kt",
     "scope": "layer",
     "bindings": [
       "text",
@@ -408,7 +408,7 @@
   },
   {
     "component": "WmTextAnimParams",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/watchmaker/WmTextParams.kt",
+    "source": "wftools2/ui/editor/components/tabs/watchmaker/WmTextParams.kt",
     "scope": "layer",
     "bindings": [
       "text",
@@ -433,7 +433,7 @@
   },
   {
     "component": "ProjectRootFields",
-    "source": "app/src/main/java/com/ailife/wftools2/domain/editor/watchmaker/WmFormatAdapter.kt:GlobalSection",
+    "source": "wftools2/domain/editor/watchmaker/WmFormatAdapter.kt:GlobalSection",
     "scope": "project",
     "bindings": [
       "project"
@@ -453,7 +453,7 @@
   },
   {
     "component": "audio-resources",
-    "source": "app/src/main/java/com/ailife/wftools2/domain/editor/watchmaker/WmFormatAdapter.kt:GlobalSection/AudioResourcesDialog",
+    "source": "wftools2/domain/editor/watchmaker/WmFormatAdapter.kt:GlobalSection/AudioResourcesDialog",
     "scope": "project-section",
     "bindings": [
       "project"
@@ -465,7 +465,7 @@
   },
   {
     "component": "watch-save-actions",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/GlobalTab.kt:106-119",
+    "source": "wftools2/ui/editor/components/tabs/GlobalTab.kt:106-119",
     "scope": "project-section",
     "bindings": [
       "project"
@@ -477,7 +477,7 @@
   },
   {
     "component": "watch-capture-actions",
-    "source": "app/src/main/java/com/ailife/wftools2/ui/editor/components/tabs/GlobalTab.kt:121-135",
+    "source": "wftools2/ui/editor/components/tabs/GlobalTab.kt:121-135",
     "scope": "project-section",
     "bindings": [
       "project"

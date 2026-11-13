@@ -1,14 +1,26 @@
 """Reproduce the initial desktop extraction from the pinned upstream renderer.
 
 Only writes new desktop source files. The Android reference is never modified.
+
+The Android sources are NOT part of this repository. This script is kept as a
+record of how the renderer was first extracted; running it requires the upstream
+project checked out next to this one:
+
+    git clone https://gitlab.com/ailife8881/wftools.git ../wftools-upstream
+    # then point SOURCE_ROOT at ../wftools-upstream/app/src/main/java/com/ailife/wftools2
+
 Subsequent desktop fixes belong in the extracted source, not repeated regeneration.
 """
 from pathlib import Path
+import os
 import re
 import xml.etree.ElementTree as ET
 
 root = Path(__file__).resolve().parents[1]
-source = root / 'app/src/main/java/com/ailife/wftools2'
+# The Android sources are not part of this repository. Point WFTOOLS_UPSTREAM_APP
+# at a checkout of https://gitlab.com/ailife8881/wftools to run this script.
+upstream_app = Path(os.environ.get('WFTOOLS_UPSTREAM_APP', str(root / 'app')))
+source = upstream_app / 'src/main/java/com/ailife/wftools2'
 out = root / 'watch-renderer/src/main/kotlin/com/ailife/wftools2/ui/editor/components'
 out.mkdir(parents=True, exist_ok=True)
 if (out / 'WmLayerRender.kt').exists():
@@ -58,7 +70,7 @@ shader = shader.replace('import kotlin.math.abs','import com.ailife.wftools.pc.g
 (out / 'WmShaderPostProcess.kt').write_text(desktop(shader), encoding='utf-8')
 
 keys = sorted(set(re.findall(r'RendererText\.(\w+)', body + desktop(geom) + desktop(shader))))
-strings = {e.attrib['name']: ''.join(e.itertext()) for e in ET.parse(root/'app/src/main/res/values/strings.xml').getroot() if e.tag == 'string'}
+strings = {e.attrib['name']: ''.join(e.itertext()) for e in ET.parse(upstream_app/'src/main/res/values/strings.xml').getroot() if e.tag == 'string'}
 def ktstring(s):
     return '"' + s.replace('\\','\\\\').replace('"','\\"').replace('$','\\$').replace('\n','\\n') + '"'
 (out / 'RendererText.kt').write_text('package com.ailife.wftools2.ui.editor.components\n\ninternal fun stringResource(text: String) = text\ninternal object RendererText {\n' + '\n'.join('    const val '+k+' = '+ktstring(strings.get(k,k)) for k in keys)+'\n}\n',encoding='utf-8')

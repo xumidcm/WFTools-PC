@@ -20,5 +20,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "WFTools-PC"
-// The upstream Android application remains available as a migration reference.
+// Only the four JVM modules are built; the upstream Android app is not part of this repository.
 include(":watch-core", ":watch-renderer", ":agent-core", ":desktopApp")
