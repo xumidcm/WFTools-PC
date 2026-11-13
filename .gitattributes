@@ -1,0 +1,30 @@
+# Keep the repository byte-identical regardless of who commits from which OS.
+* text=auto eol=lf
+
+# Windows batch files must keep CRLF to stay reliable under cmd.exe.
+*.bat text eol=crlf
+
+# Shell entry points must stay LF even when committed from Windows.
+gradlew text eol=lf
+*.sh text eol=lf
+
+# Binary assets: never normalise, never diff as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.ttf binary
+*.otf binary
+*.wav binary
+*.mp3 binary
+*.mp4 binary
+*.avi binary
+*.jar binary
+*.zip binary
+*.deb binary
+*.msi binary
+*.apk binary
+*.aab binary
+*.dex binary

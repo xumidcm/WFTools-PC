@@ -1,0 +1,73 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # libvlc is a runtime dependency of watch-renderer's media tests. The packaged
+      # Windows build ships its own copy; CI uses the distribution's instead.
+      - name: Install VLC runtime (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libvlc-dev vlc-plugin-base xvfb
+
+      - name: Install VLC runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install vlc --no-progress -y
+
+      - name: Build and test (Linux)
+        if: runner.os == 'Linux'
+        # Compose Desktop UI tests need a display server even when they never show a window.
+        run: xvfb-run -a ./gradlew build --stacktrace --no-daemon
+
+      - name: Build and test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WFTOOLS_VLC_HOME: C:\Program Files\VideoLAN\VLC
+        run: .\gradlew.bat build --stacktrace --no-daemon
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ matrix.os }}
+          path: |
+            **/build/reports/tests/**
+            **/build/test-results/**
+          retention-days: 7
+          if-no-files-found: ignore

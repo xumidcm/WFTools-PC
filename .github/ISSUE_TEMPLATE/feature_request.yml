@@ -1,0 +1,61 @@
+name: Feature request
+description: 提出功能或改进建议 / Suggest a feature or improvement
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        本项目有明确的范围（见 [PRODUCT.md](../blob/main/PRODUCT.md)）：只做 WatchMaker `.watch`
+        的桌面编辑，不做 HSC/WFF 转换、不做手机版其它市场的移植。超出范围的提案会被关闭。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决的问题
+      description: 描述当前的工作流痛点，而不是直接给出实现方案
+      placeholder: 批量调整多个图层的位置时，我每次都要逐个选中……
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望的行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 你考虑过的替代方案
+      description: 包括目前手动的绕过办法
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及区域
+      multiple: true
+      options:
+        - 画布与图层编辑
+        - 属性面板与表达式
+        - 素材库
+        - 预览与设备模拟
+        - 文件读写与草稿恢复
+        - 表盘市场
+        - AI Agent
+        - 打包与平台集成
+        - 其它
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: 确认
+      options:
+        - label: 我已搜索过现有 issue，没有重复提案
+          required: true
+        - label: 该提案在 PROJECT 范围内（`.watch` 桌面编辑）
+          required: true

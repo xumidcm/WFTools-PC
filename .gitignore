@@ -64,13 +64,26 @@ CTestTestfile.cmake
 # macOS
 .DS_Store
 
-# User requested
+# Kotlin / Gradle local state
+.kotlin/
+.local/
+.worktrees/
+.reference/
+
+# Release output (packaging scripts write here)
+artifacts/
+
+# IDE and editor scratch
+.vscode/
+.fleet/
+*.tmp
+
+# JVM crash and heap dumps
+*.hprof
+hs_err_pid*
+replay_pid*
+
+# Decompiled reference material and throwaway samples
 decompiled/
 decompilled/
-docs/*
-!docs/windows/
-.vscode/
 example/
-.local/
-artifacts/
-.worktrees/

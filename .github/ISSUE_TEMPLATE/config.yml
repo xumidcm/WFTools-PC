@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全问题 / Security vulnerability
+    url: https://github.com/xumidcm/WFTools-PC/security/advisories/new
+    about: 请勿公开披露安全漏洞，通过私密渠道报告。
+  - name: 使用说明 / User guide
+    url: https://github.com/xumidcm/WFTools-PC/blob/main/docs/windows/USER_GUIDE.md
+    about: 快捷键、预览控制与常见工作流先看这里。
+  - name: 贡献指南 / Contributing
+    url: https://github.com/xumidcm/WFTools-PC/blob/main/CONTRIBUTING.md
+    about: 提交代码前的环境、风格与测试要求。

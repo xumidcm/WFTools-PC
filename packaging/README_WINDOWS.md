@@ -26,7 +26,7 @@ MSI 按当前 Windows 用户安装到 `%LOCALAPPDATA%\Programs\WFTools-PC`，创
 
 同一发布目录的 `*-SHA256SUMS.txt` 记录 ZIP/MSI 哈希。包内 `PACKAGE-MANIFEST.json` 记录源码版本、Java 运行时、LibVLC 来源及插件缓存校验。
 
-`licenses` 保存随包组件的许可证和声明；`runtime/legal` 保留 Java 运行时原有法律文件。上游 WFTools 当前快照未提供许可证文件，详见 `licenses/UPSTREAM-LICENSE-STATUS.md`。此包为当前项目的私有交付，不虚构上游授权。
+`licenses` 保存随包组件的许可证和声明；`runtime/legal` 保留 Java 运行时原有法律文件。WFTools-PC 本身以 GPL-3.0 发布，源码即本仓库；上游 WFTools 当前快照未提供许可证文件，详见 `licenses/UPSTREAM-LICENSE-STATUS.md`。同一目录的 `GPL-3.0.txt` 为本程序的许可证全文，与仓库根目录 `LICENSE` 一致。
 
 ## 打包脚本
 
