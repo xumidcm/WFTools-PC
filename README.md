@@ -176,10 +176,10 @@ Because the program is GPL-3.0, any distributed binary must be accompanied by th
 
 ### Attribution
 
-- The desktop port is derived from **WFTools** for Android by **AILIFE** ([gitlab.com/ailife8881/wftools](https://gitlab.com/ailife8881/wftools)).
-- The rendering and preview behaviour follows the **Flue** watch face runtime.
+- The desktop port is derived from the Android version of **WFTools** developed by **AILIFE** ([gitlab.com/ailife8881/wftools](https://gitlab.com/ailife8881/wftools)).
+- Rendering and preview semantics follow the **Flue** watch face runtime.
 - Bundled third-party components keep their own licences: **libVLC** (GPL-2.0), **vlcj** (GPL-3.0), **Roboto** (Apache-2.0), the packaged Java runtime, and the JVM dependencies whose licence files are collected in each release. See [`packaging/licenses/THIRD-PARTY-NOTICES.md`](packaging/licenses/THIRD-PARTY-NOTICES.md).
-- Watch face artwork, fonts and other assets you edit with this tool are **not** covered by this licence.
+- Watch face artwork, fonts and other art assets you edit with this tool are **not** covered by this licence.
 
 ## Contributing
 
