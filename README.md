@@ -43,20 +43,13 @@ WFTools-PC takes the feature set of the mobile WFTools app and rebuilds it for a
 - Built-in AI agent panel that can inspect and edit the open document through tools, with provider profiles for OpenAI-compatible Chat Completions, OpenAI Responses and Anthropic Messages APIs. Keys are stored locally and never bundled.
 - Chinese and English UI (follow system, or pin one), Windows/Linux light and dark themes, 100–200 % DPI.
 
-<!-- Screenshots: replace this comment block once the images below exist under docs/screenshots/.
-     Keep the table as-is, just delete this opening line and the closing marker at the end of the block.
-
 ## Screenshots
 
-| Home | Editor |
-|---|---|
-| ![Home](docs/screenshots/home.png) | ![Editor](docs/screenshots/editor.png) |
+![Editor — layer list, 512×512 canvas and semantic property cards](docs/screenshots/editor.png)
 
-| Watch face market | Agent panel |
-|---|---|
-| ![Market](docs/screenshots/market.png) | ![Agent](docs/screenshots/agent.png) |
-
--->
+| Home | Watch face market |
+|:--:|:--:|
+| [![Home — recent faces, draft recovery and new-document actions](docs/screenshots/home.png)](docs/screenshots/home.png) | [![Watch face market — search, filters and downloads](docs/screenshots/market.png)](docs/screenshots/market.png) |
 
 ## Platform support
 

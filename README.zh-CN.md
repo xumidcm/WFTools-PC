@@ -43,19 +43,13 @@ WFTools-PC 把手机版 WFTools 的功能搬到为键盘鼠标设计的工作站
 - 内置 AI Agent 面板，可通过工具查看和修改当前文档；Provider 配置支持 OpenAI 兼容的 Chat Completions、OpenAI Responses 与 Anthropic Messages。密钥只存本地，不随程序分发。
 - 中英文界面（跟随系统或手动指定）、Windows/Linux 明暗主题、100–200 % DPI 缩放。
 
-<!-- 截图：docs/screenshots/ 下的图片就位后，删掉本注释块的开头与结尾标记即可显示。
-
 ## 截图
 
-| 首页 | 编辑器 |
-|---|---|
-| ![首页](docs/screenshots/home.png) | ![编辑器](docs/screenshots/editor.png) |
+![编辑器：图层面板、512×512 画布与语义属性卡](docs/screenshots/editor.png)
 
-| 表盘市场 | Agent 面板 |
-|---|---|
-| ![市场](docs/screenshots/market.png) | ![Agent](docs/screenshots/agent.png) |
-
--->
+| 首页 | 表盘市场 |
+|:--:|:--:|
+| [![首页：最近打开、草稿恢复与新建入口](docs/screenshots/home.png)](docs/screenshots/home.png) | [![表盘市场：搜索、筛选与下载](docs/screenshots/market.png)](docs/screenshots/market.png) |
 
 ## 平台支持
 
